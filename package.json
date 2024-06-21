@@ -1,7 +1,13 @@
 {
   "name": "pino-telegram-webhook",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "A [Pino v7+ transport](https://getpino.io/#/docs/transports?id=v7-transports) to send message to [Telegram](https://telegram.org/)",
+  "keywords": [
+    "pino",
+    "telegram",
+    "webhook",
+    "telegram webhook"
+  ],
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -10,13 +16,18 @@
     "node": ">=18.0.0",
     "npm": ">=7.24.2"
   },
+  "dependencies": {
+    "pino-abstract-transport": "^1.2.0"
+  },
+  "repository": "https://github.com/Jhon-Mosk/pino-telegram-webhook",
+  "bugs": {
+    "url": "https://github.com/Jhon-Mosk/pino-telegram-webhook/issues"
+  },
+  "homepage": "https://github.com/Jhon-Mosk/pino-telegram-webhook",
   "author": {
     "name": "Evgeniy Politiko",
     "email": "Jhon-mosk@yandex.ru",
     "url": "https://jhon-mosk.ru/"
   },
-  "license": "MIT",
-  "dependencies": {
-    "pino-abstract-transport": "^1.2.0"
-  }
+  "license": "MIT"
 }
