@@ -21,8 +21,8 @@ const logger = pino({
       chatId: -1234567890,
       botToken: "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
       extra: {
-              parse_mode: "HTML",
-            },
+        parse_mode: "HTML",
+      },
     },
   },
 })
