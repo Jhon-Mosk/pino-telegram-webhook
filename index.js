@@ -30,6 +30,8 @@ export async function sendMsgToTg(chatId, botToken, text, extra = {}) {
   throw new Error(`${status}: ${statusText}`);
 }
 
+const markdownParseModes = ["Markdown", "MarkdownV2"];
+
 /**
  *
  * @param {object} params - parameters for creating a transport
@@ -42,7 +44,14 @@ export async function sendMsgToTg(chatId, botToken, text, extra = {}) {
 export default function ({ chatId, botToken, verbose = false, extra = {} }) {
   return build(async function (source) {
     for await (const obj of source) {
-      const text = verbose ? JSON.stringify(obj) : obj.msg;
+      let text = verbose ? JSON.stringify(obj) : obj.msg;
+
+      const parse_mode = extra.parse_mode;
+
+      if (parse_mode && markdownParseModes.includes(parse_mode)) {
+        text = "```\n" + text + "\n```";
+      }
+
       try {
         await sendMsgToTg(chatId, botToken, text, extra);
       } catch (error) {
