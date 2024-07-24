@@ -1,18 +1,16 @@
 {
   "name": "pino-telegram-webhook",
-  "version": "0.1.0",
-  "type": "module",
+  "version": "0.2.0",
   "description": "A [Pino v7+ transport](https://getpino.io/#/docs/transports?id=v7-transports) to send message to [Telegram](https://telegram.org/)",
   "keywords": [
     "pino",
     "telegram",
     "webhook",
-    "telegram webhook",
-    "transport"
+    "telegram webhook"
   ],
   "main": "index.js",
   "scripts": {
-    "test": "node test/transport.test.js"
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "engines": {
     "node": ">=18.0.0",
@@ -21,13 +19,7 @@
   "dependencies": {
     "pino-abstract-transport": "^1.2.0"
   },
-  "devDependencies": {
-    "undici": "^6.19.2"
-  },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/Jhon-Mosk/pino-telegram-webhook"
-  },
+  "repository": "https://github.com/Jhon-Mosk/pino-telegram-webhook",
   "bugs": {
     "url": "https://github.com/Jhon-Mosk/pino-telegram-webhook/issues"
   },
