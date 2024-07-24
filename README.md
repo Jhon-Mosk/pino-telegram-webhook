@@ -21,8 +21,8 @@ const logger = pino({
       chatId: -1234567890,
       botToken: "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
       extra: {
-              parse_mode: "HTML",
-            },
+        parse_mode: "HTML",
+      },
     },
   },
 })
@@ -31,3 +31,29 @@ logger.error('<b>test log!</b>');
 ```
 
 The extra parameter is optional. Parameters that the method [sendMessage](https://core.telegram.org/bots/api#sendmessage) supports can be passed to it
+
+---
+
+If `verbose = true`, the message will be displayed as
+```
+{
+  "level": 50,
+  "time": 1721832322878,
+  "pid": 13522,
+  "hostname": "fedora",
+  "msg": "`inline fixed-width code`"
+}
+```
+
+---
+
+If `verbose = true` and `parse_mode = "HTML|Markdown|MarkdownV2`, the message will be displayed as
+```json
+{
+  "level": 50,
+  "time": 1721832322878,
+  "pid": 13522,
+  "hostname": "fedora",
+  "msg": "`inline fixed-width code`"
+}
+```
