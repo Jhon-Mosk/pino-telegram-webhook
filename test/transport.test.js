@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
+import { Transform } from "node:stream";
 import { after, describe, it } from "node:test";
-import { Transform } from "stream";
 import { MockAgent, setGlobalDispatcher } from "undici";
 import createTransport, { sendMsgToTg } from "../index.js";
 

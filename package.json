@@ -1,6 +1,6 @@
 {
   "name": "pino-telegram-webhook",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "A [Pino v7+ transport](https://getpino.io/#/docs/transports?id=v7-transports) to send message to [Telegram](https://telegram.org/)",
   "keywords": [
     "pino",
@@ -11,7 +11,7 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test"
   },
   "engines": {
     "node": ">=18.0.0",
@@ -30,5 +30,8 @@
     "email": "Jhon-mosk@yandex.ru",
     "url": "https://jhon-mosk.ru/"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "undici": "^6.19.8"
+  }
 }
