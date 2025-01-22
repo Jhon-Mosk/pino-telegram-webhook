@@ -18,7 +18,10 @@
     "npm": ">=7.24.2"
   },
   "dependencies": {
-    "pino-abstract-transport": "^1.2.0"
+    "https-proxy-agent": "^7.0.6",
+    "node-fetch": "^3.3.2",
+    "pino-abstract-transport": "^1.2.0",
+    "socks-proxy-agent": "^8.0.5"
   },
   "repository": "https://github.com/Jhon-Mosk/pino-telegram-webhook",
   "bugs": {

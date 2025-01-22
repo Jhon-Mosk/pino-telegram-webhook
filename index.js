@@ -1,8 +1,15 @@
+import fetch from "node-fetch";
 import build from "pino-abstract-transport";
 
 const API_URL = "https://api.telegram.org/bot";
 
-export async function sendMsgToTg(chatId, botToken, message, extra = {}) {
+export async function sendMsgToTg(
+  chatId,
+  botToken,
+  message,
+  extra = {},
+  proxy = null
+) {
   const method = "sendMessage";
   const url = `${API_URL}${botToken}/${method}`;
   const body = JSON.stringify({
@@ -10,6 +17,7 @@ export async function sendMsgToTg(chatId, botToken, message, extra = {}) {
     text: message,
     ...extra,
   });
+  const proxyAgent = proxy ? await getProxyAgent(proxy) : undefined;
 
   const response = await fetch(url, {
     method: "POST",
@@ -17,6 +25,7 @@ export async function sendMsgToTg(chatId, botToken, message, extra = {}) {
       "Content-Type": "application/json",
     },
     body,
+    agent: proxyAgent,
   });
 
   if (response.ok) {
@@ -54,6 +63,14 @@ const prepareMessage = (pinoData, verbose, parseMode) => {
   return pinoData.msg;
 };
 
+const getProxyAgent = async (proxyURL) => {
+  if (!proxyURL) return null;
+  if (proxyURL.startsWith("http"))
+    return new (await import("https-proxy-agent")).HttpsProxyAgent(proxyURL);
+  if (proxyURL.startsWith("socks"))
+    return new (await import("socks-proxy-agent")).SocksProxyAgent(proxyURL);
+};
+
 /**
  *
  * @param {object} params - parameters for creating a transport
@@ -63,14 +80,20 @@ const prepareMessage = (pinoData, verbose, parseMode) => {
  * @param {object} params.extra - additional parameters for sending a message https://core.telegram.org/bots/api#sendmessage
  * @returns {Promise}
  */
-export default function ({ chatId, botToken, verbose = false, extra = {} }) {
+export default function ({
+  chatId,
+  botToken,
+  verbose = false,
+  extra = {},
+  proxy = null,
+}) {
   return build(async function (source) {
     for await (const obj of source) {
       const { parse_mode } = extra;
       const message = prepareMessage(obj, verbose, parse_mode);
 
       try {
-        await sendMsgToTg(chatId, botToken, message, extra);
+        await sendMsgToTg(chatId, botToken, message, extra, proxy);
       } catch (error) {
         console.error(error);
       }
