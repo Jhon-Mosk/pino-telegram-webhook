@@ -39,7 +39,7 @@ const verboseSerializer = {
   markdownv2: (string) => `\`\`\`json\n${string}\n\`\`\``,
 };
 
-const prepareMessage = (pinoData, verbose, parseMode) => {
+const prepareMessage = (pinoData, verbose, parseMode, messageKey = 'msg') => {
   if (verbose) {
     const msg = JSON.stringify(pinoData, null, 2);
 
@@ -52,7 +52,7 @@ const prepareMessage = (pinoData, verbose, parseMode) => {
     return msg;
   }
 
-  return pinoData.msg;
+  return pinoData[messageKey];
 };
 
 /**
@@ -61,17 +61,18 @@ const prepareMessage = (pinoData, verbose, parseMode) => {
  * @param {number} params.chatId - chat ID
  * @param {string} params.botToken - bot token
  * @param {boolean} params.verbose - send debugging information
+ * @param {string} params.messageKey - the message key from pino logs
  * @param {object} params.extra - additional parameters for sending a message https://core.telegram.org/bots/api#sendmessage
  * @returns {Promise}
  */
-export default function ({ chatId, botToken, verbose = false, extra = {} }) {
+export default function ({ chatId, botToken, messageKey = 'msg', verbose = false, extra = {} }) {
   const pendingPromises = new Set();
 
   return build(
     async (source) => {
       for await (const obj of source) {
         const { parse_mode } = extra;
-        const message = prepareMessage(obj, verbose, parse_mode);
+        const message = prepareMessage(obj, verbose, parse_mode, messageKey);
 
         const promise = sendMsgToTg(chatId, botToken, message, extra)
           .catch((reason) => console.error(reason))
