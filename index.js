@@ -77,7 +77,7 @@ export default function ({
         const message = prepareMessage({
           pinoData,
           verbose,
-          parse_mode,
+          parseMode: parse_mode,
           messageKey,
         });
 
