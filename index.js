@@ -1,4 +1,3 @@
-/* eslint-disable camelcase */
 import build from 'pino-abstract-transport';
 
 const API_URL = 'https://api.telegram.org';
