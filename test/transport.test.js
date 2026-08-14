@@ -1,4 +1,3 @@
-/* eslint-disable camelcase */
 import assert from 'node:assert/strict';
 import { Transform } from 'node:stream';
 import { after, describe, it } from 'node:test';
