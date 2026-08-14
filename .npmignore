@@ -2,7 +2,6 @@ node_modules
 .fuse*
 test/
 .nvmrc
-eslint.config.js
+biome.json
 .editorconfig
-prettier.config.js
 temp/

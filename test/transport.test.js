@@ -1,4 +1,3 @@
-/* eslint-disable camelcase */
 import assert from 'node:assert/strict';
 import { Transform } from 'node:stream';
 import { after, describe, it } from 'node:test';
@@ -19,10 +18,13 @@ const incorrectExtra = {
   parse_mode: 'hHtml',
 };
 
+const customApiUrl = 'https://my-proxy.example.com';
+
 const mockAgent = new MockAgent({ connections: 1 });
 setGlobalDispatcher(mockAgent);
 
 const mockClient = mockAgent.get(API_URL);
+const mockProxyClient = mockAgent.get(customApiUrl);
 
 mockClient
   .intercept({
@@ -89,6 +91,20 @@ mockClient
   })
   .reply(400, 'Bad Request');
 
+mockProxyClient
+  .intercept({
+    path: `/bot${botToken}/sendMessage`,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text,
+      ...extra,
+    }),
+  })
+  .reply(200, JSON.stringify({ ok: true, result: text }))
+  .times(2);
+
 describe('pino-telegram-webhook', () => {
   it('build transport', async () => {
     const transport = await createTransport({ chatId, botToken, extra });
@@ -96,7 +112,10 @@ describe('pino-telegram-webhook', () => {
   });
 
   describe('send message to telegram', () => {
-    after(async () => await mockClient.close());
+    after(async () => {
+      await mockClient.close();
+      await mockProxyClient.close();
+    });
 
     it('wrong chat ID', () => {
       assert.rejects(
@@ -128,6 +147,14 @@ describe('pino-telegram-webhook', () => {
 
     it('success sent', async () => {
       await sendMsgToTg(chatId, botToken, text, extra);
+    });
+
+    it('custom apiUrl', async () => {
+      await sendMsgToTg(chatId, botToken, text, extra, customApiUrl);
+    });
+
+    it('custom apiUrl with trailing slash', async () => {
+      await sendMsgToTg(chatId, botToken, text, extra, `${customApiUrl}/`);
     });
   });
 });

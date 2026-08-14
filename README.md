@@ -19,13 +19,14 @@ const logger = pino({
     level: 'error',
     options: {
       chatId: -1234567890,
-      botToken: "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
+      botToken: '123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11',
+      apiUrl: 'https://api.telegram.org',
       extra: {
-        parse_mode: "HTML",
+        parse_mode: 'HTML',
       },
     },
   },
-})
+});
 
 logger.error('<b>test log!</b>');
 ```
@@ -36,6 +37,7 @@ logger.error('<b>test log!</b>');
 - `botToken`: The bot token of the Telegram bot. Required.
 - `verbose`: Whether to display the log in verbose mode.
 - `messageKey`: The key of the log message. Default is `msg`. Required if the logger's [message key](https://github.com/pinojs/pino/blob/HEAD/docs/api.md#messagekey-string) has been changed.
+- `apiUrl`: Telegram Bot API URL. Default is `https://api.telegram.org`. Use this to send requests through your own reverse proxy.
 - `extra` : The extra parameter is optional. Parameters that the method [sendMessage](https://core.telegram.org/bots/api#sendmessage) supports can be passed to it
 
 The extra parameter is optional. Parameters that the method [sendMessage](https://core.telegram.org/bots/api#sendmessage) supports can be passed to it
@@ -43,6 +45,7 @@ The extra parameter is optional. Parameters that the method [sendMessage](https:
 ---
 
 If `verbose = true`, the message will be displayed as
+
 ```
 {
   "level": 50,
@@ -56,6 +59,7 @@ If `verbose = true`, the message will be displayed as
 ---
 
 If `verbose = true` and `parse_mode = "HTML|Markdown|MarkdownV2`, the message will be displayed as
+
 ```json
 {
   "level": 50,
