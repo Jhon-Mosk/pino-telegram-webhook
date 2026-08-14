@@ -12,12 +12,12 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
-    "lint": "eslint . && prettier -c \"**/*.js\" \"**/*.json\" \"**/*.md\"",
-    "fix": "eslint . --fix && prettier --write \"**/*.js\" \"**/*.json\" \"**/*.md\""
+    "lint": "biome check .",
+    "fix": "biome check --write ."
   },
   "engines": {
-    "node": ">=18.0.0",
-    "npm": ">=7.24.2"
+    "node": ">=22.0.0",
+    "npm": ">=10.0.0"
   },
   "dependencies": {
     "pino-abstract-transport": "^1.2.0"
@@ -37,7 +37,7 @@
   },
   "license": "MIT",
   "devDependencies": {
-    "eslint-config-metarhia": "9.1.1",
+    "@biomejs/biome": "^2.5.8",
     "undici": "^6.19.8"
   }
 }
