@@ -1,11 +1,18 @@
 /* eslint-disable camelcase */
 import build from 'pino-abstract-transport';
 
-const API_URL = 'https://api.telegram.org/bot';
+const API_URL = 'https://api.telegram.org';
 
-export async function sendMsgToTg(chatId, botToken, message, extra = {}) {
+export async function sendMsgToTg(
+  chatId,
+  botToken,
+  message,
+  extra = {},
+  apiUrl = API_URL,
+) {
   const method = 'sendMessage';
-  const url = `${API_URL}${botToken}/${method}`;
+  const baseUrl = apiUrl.replace(/\/+$/, '');
+  const url = `${baseUrl}/bot${botToken}/${method}`;
   const body = JSON.stringify({
     chat_id: chatId,
     text: message,
@@ -58,6 +65,7 @@ const prepareMessage = ({ pinoData, verbose, parseMode, messageKey }) => {
  * @param {string} params.botToken - bot token
  * @param {boolean} [params.verbose] - send debugging information
  * @param {string} [params.messageKey] - key for message. Default is 'msg'
+ * @param {string} [params.apiUrl] - Telegram Bot API URL. Default is 'https://api.telegram.org'
  * @param {object} [params.extra] - additional parameters for sending a message https://core.telegram.org/bots/api#sendmessage
  * @returns {Promise}
  */
@@ -66,6 +74,7 @@ export default function ({
   botToken,
   verbose = false,
   messageKey = 'msg',
+  apiUrl = API_URL,
   extra = {},
 }) {
   const pendingPromises = new Set();
@@ -81,7 +90,7 @@ export default function ({
           messageKey,
         });
 
-        const promise = sendMsgToTg(chatId, botToken, message, extra)
+        const promise = sendMsgToTg(chatId, botToken, message, extra, apiUrl)
           .catch((reason) => console.error(reason))
           .finally(() => {
             pendingPromises.delete(promise);
