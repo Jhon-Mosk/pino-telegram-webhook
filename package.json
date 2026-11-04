@@ -4,7 +4,12 @@
   "description": "A Pino v7+ transport that sends logs to Telegram",
   "keywords": [
     "pino",
+    "pino-transport",
     "telegram",
+    "telegram-bot",
+    "logging",
+    "logger",
+    "transport",
     "webhook",
     "telegram webhook"
   ],
