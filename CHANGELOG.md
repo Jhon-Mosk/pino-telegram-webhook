@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- When messages were dropped because the queue was full, their number is sent
+  to the chat once the queue is sent, not only written to stderr. The notice
+  is plain text and keeps the other `extra` parameters, such as
+  `message_thread_id`. Option `notifyDropped: false` turns it off.
+
 ### Changed
 
 - The minimum Node.js version is 22.12. `require()` of this ES module works
