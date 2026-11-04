@@ -61,5 +61,107 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   markup.
 - The `close` callback was called twice.
 
+## [0.4.0] - 2026-08-14
+
+### Added
+
+- Option `apiUrl` to send requests through a reverse proxy or your own Bot API
+  server. `sendMsgToTg` accepts it as the fifth argument.
+
+### Changed
+
+- The minimum Node.js version is 22 (`engines`: Node.js 22, npm 10).
+
+## [0.3.1] - 2025-11-08
+
+### Fixed
+
+- In verbose mode `parse_mode` was ignored since 0.3.0, and the JSON was sent
+  without a code block
+  ([#11](https://github.com/Jhon-Mosk/pino-telegram-webhook/pull/11)).
+
+## [0.3.0] - 2025-03-13
+
+### Added
+
+- Option `messageKey` for loggers with a custom
+  [`messageKey`](https://github.com/pinojs/pino/blob/HEAD/docs/api.md#messagekey-string).
+
+## [0.2.4] - 2025-01-24
+
+### Changed
+
+- Messages are sent without waiting for the previous one.
+- The package contains only `index.js`, `README.md` and `LICENSE`, without
+  tests and development configs.
+
+### Fixed
+
+- Messages logged right before the logger closed could be lost. Closing the
+  transport now waits for the requests in flight.
+
+## [0.2.3] - 2024-09-06
+
+No changes in the transport code.
+
+## [0.2.2] - 2024-09-02
+
+### Fixed
+
+- Since 0.2.0 the package failed to load with `SyntaxError: Cannot use import
+  statement outside a module`: `package.json` lost `"type": "module"`. Node.js
+  versions that detect ES module syntax (20.19+, 22.7+) were not affected.
+
+## [0.2.1] - 2024-07-24
+
+### Fixed
+
+- Temporary files that got into the 0.2.0 package are removed. The package
+  still could not be loaded, see 0.2.2.
+
+## [0.2.0] - 2024-07-24
+
+### Changed
+
+- In verbose mode the JSON is pretty-printed. With `parse_mode` set to
+  `HTML`, `Markdown` or `MarkdownV2` it is sent as a code block.
+
+## [0.1.0] - 2024-06-29
+
+### Added
+
+- `sendMsgToTg` is exported.
+
+### Changed
+
+- The package is an ES module. `require('pino-telegram-webhook')` no longer
+  works; loading it as a pino target by name still does.
+
+## [0.0.1] - 2024-06-21
+
+### Added
+
+- `keywords`, `repository`, `bugs` and `homepage` in `package.json`.
+
+## [0.0.0] - 2024-06-21
+
+### Added
+
+- The transport: sends the message of each log record (`msg`) to a Telegram
+  chat. Options `chatId`, `botToken`, `verbose` (the whole record as JSON) and
+  `extra` (parameters of
+  [sendMessage](https://core.telegram.org/bots/api#sendmessage)).
+
 [Unreleased]: https://github.com/Jhon-Mosk/pino-telegram-webhook/compare/v0.5.0...HEAD
 [0.5.0]: https://github.com/Jhon-Mosk/pino-telegram-webhook/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/Jhon-Mosk/pino-telegram-webhook/compare/v0.3.1...v0.4.0
+[0.3.1]: https://github.com/Jhon-Mosk/pino-telegram-webhook/compare/0.3.0...v0.3.1
+[0.3.0]: https://github.com/Jhon-Mosk/pino-telegram-webhook/compare/0.2.4...0.3.0
+[0.2.4]: https://github.com/Jhon-Mosk/pino-telegram-webhook/compare/0.0.0...0.2.4
+[0.2.3]: https://www.npmjs.com/package/pino-telegram-webhook/v/0.2.3
+[0.2.2]: https://www.npmjs.com/package/pino-telegram-webhook/v/0.2.2
+[0.2.1]: https://www.npmjs.com/package/pino-telegram-webhook/v/0.2.1
+[0.2.0]: https://www.npmjs.com/package/pino-telegram-webhook/v/0.2.0
+[0.1.0]: https://www.npmjs.com/package/pino-telegram-webhook/v/0.1.0
+[0.0.1]: https://www.npmjs.com/package/pino-telegram-webhook/v/0.0.1
+[0.0.0]: https://github.com/Jhon-Mosk/pino-telegram-webhook/releases/tag/0.0.0
