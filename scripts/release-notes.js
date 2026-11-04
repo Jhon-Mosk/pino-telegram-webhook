@@ -3,6 +3,11 @@
 // they are) and relative links are made absolute.
 //
 //   node scripts/release-notes.js 0.5.0
+//
+// After the tag is pushed and the version is published to npm:
+//
+//   gh release create v0.5.0 --verify-tag --title 0.5.0 \
+//     --notes-file <(node scripts/release-notes.js 0.5.0)
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
