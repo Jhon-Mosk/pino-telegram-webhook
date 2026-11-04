@@ -1,13 +1,49 @@
 import build from 'pino-abstract-transport';
 
 const API_URL = 'https://api.telegram.org';
+const DEFAULT_TIMEOUT = 10_000;
 
+/**
+ * An error returned by the Telegram Bot API or by a proxy in front of it.
+ */
+export class TelegramApiError extends Error {
+  /**
+   * @param {string} message
+   * @param {object} details
+   * @param {number} details.status - HTTP status of the response
+   * @param {number} [details.errorCode] - `error_code` from the Telegram response
+   * @param {object} [details.parameters] - `parameters` from the Telegram
+   *   response, e.g. `{ retry_after: 5 }` for 429 Too Many Requests
+   */
+  constructor(message, { status, errorCode, parameters } = {}) {
+    super(message);
+    this.name = 'TelegramApiError';
+    this.status = status;
+    this.errorCode = errorCode;
+    this.parameters = parameters;
+  }
+}
+
+/**
+ * Sends a message with the sendMessage method of the Telegram Bot API.
+ *
+ * @param {number|string} chatId
+ * @param {string} botToken
+ * @param {string} message
+ * @param {object} [extra] - additional sendMessage parameters
+ * @param {string} [apiUrl] - Telegram Bot API URL
+ * @param {object} [options]
+ * @param {number} [options.timeout] - request timeout in ms, `0` disables it
+ * @returns {Promise<object>} the sent Message
+ * @throws {TelegramApiError} when the API responds with an error
+ */
 export async function sendMsgToTg(
   chatId,
   botToken,
   message,
   extra = {},
   apiUrl = API_URL,
+  { timeout = DEFAULT_TIMEOUT } = {},
 ) {
   const method = 'sendMessage';
   const baseUrl = apiUrl.replace(/\/+$/, '');
@@ -24,6 +60,7 @@ export async function sendMsgToTg(
       'Content-Type': 'application/json',
     },
     body,
+    signal: timeout > 0 ? AbortSignal.timeout(timeout) : undefined,
   });
 
   // Telegram returns a JSON body with `description` for errors too,
@@ -31,20 +68,24 @@ export async function sendMsgToTg(
   let data;
   try {
     data = await response.json();
-  } catch {
-    data = undefined;
+  } catch (error) {
+    // A non-JSON body (e.g. an HTML page from a proxy) is reported by the
+    // status below; a timeout or a network error while reading is rethrown.
+    if (!(error instanceof SyntaxError)) throw error;
   }
 
   if (data?.ok) return data.result;
 
+  const { status, statusText } = response;
+
   if (data?.description) {
-    throw new Error(
-      `${data.error_code ?? response.status}: ${data.description}`,
+    throw new TelegramApiError(
+      `${data.error_code ?? status}: ${data.description}`,
+      { status, errorCode: data.error_code, parameters: data.parameters },
     );
   }
 
-  const { status, statusText } = response;
-  throw new Error(`${status}: ${statusText}`);
+  throw new TelegramApiError(`${status}: ${statusText}`, { status });
 }
 
 const verboseSerializer = {
@@ -80,6 +121,7 @@ const prepareMessage = ({ pinoData, verbose, parseMode, messageKey }) => {
  * @param {string} [params.messageKey] - key for message. Default is 'msg'
  * @param {string} [params.apiUrl] - Telegram Bot API URL. Default is 'https://api.telegram.org'
  * @param {object} [params.extra] - additional parameters for sending a message https://core.telegram.org/bots/api#sendmessage
+ * @param {number} [params.timeout] - request timeout in ms. Default is 10000, `0` disables it
  * @returns {Promise}
  */
 export default function ({
@@ -89,6 +131,7 @@ export default function ({
   messageKey = 'msg',
   apiUrl = API_URL,
   extra = {},
+  timeout = DEFAULT_TIMEOUT,
 }) {
   // Without these every log would fail silently, so fail fast instead.
   if (
@@ -118,7 +161,9 @@ export default function ({
           messageKey,
         });
 
-        const promise = sendMsgToTg(chatId, botToken, message, extra, apiUrl)
+        const promise = sendMsgToTg(chatId, botToken, message, extra, apiUrl, {
+          timeout,
+        })
           .catch((reason) => console.error(reason))
           .finally(() => {
             pendingPromises.delete(promise);

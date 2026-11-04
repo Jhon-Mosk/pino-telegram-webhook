@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { Transform } from 'node:stream';
 import { beforeEach, describe, it } from 'node:test';
-import createTransport, { sendMsgToTg } from '../index.js';
+import createTransport, { sendMsgToTg, TelegramApiError } from '../index.js';
 
 const chatId = -1234567890;
 const botToken = '123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11';
@@ -18,6 +18,12 @@ const okResponse = () => jsonResponse({ ok: true, result: { message_id: 1 } });
 
 const mockFetch = (t, impl = async () => okResponse()) =>
   t.mock.method(globalThis, 'fetch', impl);
+
+/** A fetch that never responds and rejects only when its signal aborts. */
+const hangingFetch = async (_url, init) =>
+  new Promise((_resolve, reject) => {
+    init.signal?.addEventListener('abort', () => reject(init.signal.reason));
+  });
 
 const requestOf = (fetchMock, index = 0) => {
   const [url, init] = fetchMock.mock.calls[index].arguments;
@@ -137,6 +143,65 @@ describe('sendMsgToTg', () => {
     await assert.rejects(sendMsgToTg(chatId, botToken, text), {
       message: '502: Bad Gateway',
     });
+  });
+
+  it('throws a TelegramApiError with the response details', async (t) => {
+    mockFetch(t, async () =>
+      jsonResponse(
+        {
+          ok: false,
+          error_code: 429,
+          description: 'Too Many Requests: retry after 5',
+          parameters: { retry_after: 5 },
+        },
+        { status: 429 },
+      ),
+    );
+
+    const error = await sendMsgToTg(chatId, botToken, text).catch((e) => e);
+
+    assert.ok(error instanceof TelegramApiError);
+    assert.ok(error instanceof Error);
+    assert.equal(error.name, 'TelegramApiError');
+    assert.equal(error.status, 429);
+    assert.equal(error.errorCode, 429);
+    assert.deepEqual(error.parameters, { retry_after: 5 });
+  });
+
+  it('throws a TelegramApiError with only the status for non-JSON bodies', async (t) => {
+    mockFetch(t, async () => new Response('oops', { status: 503 }));
+
+    const error = await sendMsgToTg(chatId, botToken, text).catch((e) => e);
+
+    assert.ok(error instanceof TelegramApiError);
+    assert.equal(error.status, 503);
+    assert.equal(error.errorCode, undefined);
+    assert.equal(error.parameters, undefined);
+  });
+
+  it('aborts the request after the timeout', async (t) => {
+    mockFetch(t, hangingFetch);
+
+    await assert.rejects(
+      sendMsgToTg(chatId, botToken, text, {}, undefined, { timeout: 20 }),
+      { name: 'TimeoutError' },
+    );
+  });
+
+  it('sets a timeout signal by default', async (t) => {
+    const fetchMock = mockFetch(t);
+
+    await sendMsgToTg(chatId, botToken, text);
+
+    assert.ok(requestOf(fetchMock).init.signal instanceof AbortSignal);
+  });
+
+  it('does not set a timeout when timeout is 0', async (t) => {
+    const fetchMock = mockFetch(t);
+
+    await sendMsgToTg(chatId, botToken, text, {}, undefined, { timeout: 0 });
+
+    assert.equal(requestOf(fetchMock).init.signal, undefined);
   });
 
   it('propagates network errors', async (t) => {
@@ -284,6 +349,15 @@ describe('transport', () => {
       consoleError.mock.calls[0].arguments[0].message,
       '400: Bad Request',
     );
+  });
+
+  it('passes the timeout option to requests', async (t) => {
+    mockFetch(t, hangingFetch);
+
+    await runTransport({ timeout: 20 }, [record()]);
+
+    assert.equal(consoleError.mock.callCount(), 1);
+    assert.equal(consoleError.mock.calls[0].arguments[0].name, 'TimeoutError');
   });
 
   it('waits for pending requests before closing', async (t) => {
