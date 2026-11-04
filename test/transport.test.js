@@ -40,14 +40,17 @@ const errorResponse = (status, description, parameters) =>
     { status },
   );
 
-/** A fetch mock that returns the given responses in order, then OK. */
+/**
+ * A fetch mock that returns the given responses in order, then OK. A step is
+ * an Error to throw or a function called with the fetch arguments.
+ */
 const sequenceFetch = (...steps) => {
   let call = 0;
-  return async () => {
+  return async (...args) => {
     const step = steps[call++];
     if (step === undefined) return okResponse();
     if (step instanceof Error) throw step;
-    return step();
+    return step(...args);
   };
 };
 
@@ -645,6 +648,132 @@ describe('transport', () => {
       stderr[1],
       /^pino-telegram-webhook: 2 log message\(s\) dropped/,
     );
+  });
+
+  describe('notice about dropped messages', () => {
+    const slowOk = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return okResponse();
+    };
+    const overflow = [1, 2, 3, 4].map((n) => record({ msg: `msg ${n}` }));
+    const NOTICE =
+      '⚠️ pino-telegram-webhook: 2 log message(s) dropped because the queue was full (maxQueueSize: 1)';
+
+    it('is sent as plain text with the other extra parameters', async (t) => {
+      const fetchMock = mockFetch(t, slowOk);
+
+      await runTransport(
+        {
+          maxQueueSize: 1,
+          extra: { parse_mode: 'MarkdownV2', message_thread_id: 42 },
+        },
+        overflow,
+      );
+
+      assert.equal(fetchMock.mock.callCount(), 3);
+      assert.deepEqual(requestOf(fetchMock, 1).body, {
+        chat_id: chatId,
+        text: 'msg 2',
+        parse_mode: 'MarkdownV2',
+        message_thread_id: 42,
+      });
+      assert.deepEqual(requestOf(fetchMock, 2).body, {
+        chat_id: chatId,
+        text: NOTICE,
+        message_thread_id: 42,
+      });
+    });
+
+    it('is not sent with notifyDropped: false', async (t) => {
+      const fetchMock = mockFetch(t, slowOk);
+
+      await runTransport({ maxQueueSize: 1, notifyDropped: false }, overflow);
+
+      assert.equal(fetchMock.mock.callCount(), 2);
+      assert.match(stderr.at(-1), /2 log message\(s\) dropped/);
+    });
+
+    it('is sent again for messages dropped later', async (t) => {
+      const fetchMock = mockFetch(t, slowOk);
+      const transport = createTransport({ chatId, botToken, maxQueueSize: 1 });
+      const closed = once(transport, 'close');
+      const write = (n) =>
+        transport.write(`${JSON.stringify(record({ msg: `msg ${n}` }))}\n`);
+
+      write(1);
+      write(2);
+      write(3); // dropped
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      write(4);
+      write(5);
+      write(6); // dropped
+      transport.end();
+      await closed;
+
+      const texts = fetchMock.mock.calls.map(
+        (_, i) => requestOf(fetchMock, i).body.text,
+      );
+      const notice = (count) =>
+        `⚠️ pino-telegram-webhook: ${count} log message(s) dropped because the queue was full (maxQueueSize: 1)`;
+      assert.deepEqual(texts, [
+        'msg 1',
+        'msg 2',
+        notice(1),
+        'msg 4',
+        'msg 5',
+        notice(1),
+      ]);
+    });
+
+    it('reports a failed notice as a notice', async (t) => {
+      mockFetch(
+        t,
+        sequenceFetch(slowOk, slowOk, async () =>
+          errorResponse(400, 'Bad Request: message thread not found'),
+        ),
+      );
+
+      await runTransport({ maxQueueSize: 1 }, overflow);
+
+      assert.equal(
+        stderr.at(-1),
+        `${PREFIX}failed to send the notice about dropped log messages: 400: Bad Request: message thread not found\n`,
+      );
+    });
+
+    it('is not sent after the transport gave up on closing', async (t) => {
+      const fetchMock = mockFetch(t, async () =>
+        errorResponse(429, 'Too Many Requests: retry after 40', {
+          retry_after: 40,
+        }),
+      );
+
+      await runTransport({ maxQueueSize: 1, closeTimeout: 100 }, overflow);
+
+      assert.equal(fetchMock.mock.callCount(), 1);
+      assert.deepEqual(stderr.slice(1), [
+        `${PREFIX}2 log message(s) not sent before the transport closed: a retry in 40 s after "429: Too Many Requests: retry after 40" does not fit in closeTimeout (100 ms)\n`,
+        `${PREFIX}2 log message(s) dropped because the queue was full (maxQueueSize: 1)\n`,
+      ]);
+    });
+
+    it('is not counted as a log message when it is aborted on close', async (t) => {
+      const fetchMock = mockFetch(
+        t,
+        sequenceFetch(slowOk, slowOk, hangingFetch),
+      );
+
+      await runTransport(
+        { maxQueueSize: 1, timeout: 0, closeTimeout: 300 },
+        overflow,
+      );
+
+      assert.equal(fetchMock.mock.callCount(), 3);
+      assert.equal(requestOf(fetchMock, 2).body.text, NOTICE);
+      assert.deepEqual(stderr.slice(1), [
+        `${PREFIX}2 log message(s) dropped because the queue was full (maxQueueSize: 1)\n`,
+      ]);
+    });
   });
 
   it('reports the cause of network errors', async (t) => {
