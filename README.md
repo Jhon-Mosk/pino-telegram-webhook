@@ -96,9 +96,16 @@ A record without a message (e.g. `logger.error({ userId: 1 })`) is sent as JSON,
 import { sendMsgToTg, TelegramApiError } from 'pino-telegram-webhook';
 
 try {
-  await sendMsgToTg(chatId, botToken, 'Hello', { parse_mode: 'HTML' }, undefined, {
-    timeout: 5000,
-  });
+  await sendMsgToTg(
+    chatId,
+    botToken,
+    'Hello',
+    { parse_mode: 'HTML' },
+    undefined,
+    {
+      timeout: 5000,
+    },
+  );
 } catch (error) {
   if (error instanceof TelegramApiError && error.status === 429) {
     console.log(`Retry after ${error.parameters.retry_after} s`);
