@@ -341,6 +341,13 @@ limit Telegram can ask to wait longer than that. The messages that were not
 sent are reported to stderr. Send fewer logs to Telegram, e.g. only `error`
 and above.
 
+## Contributing
+
+Bug reports and pull requests are welcome, see
+[CONTRIBUTING.md](https://github.com/Jhon-Mosk/pino-telegram-webhook/blob/main/CONTRIBUTING.md).
+Report security issues privately, see
+[SECURITY.md](https://github.com/Jhon-Mosk/pino-telegram-webhook/blob/main/SECURITY.md).
+
 ## License
 
 [MIT](https://github.com/Jhon-Mosk/pino-telegram-webhook/blob/main/LICENSE)
