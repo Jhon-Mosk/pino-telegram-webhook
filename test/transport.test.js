@@ -369,6 +369,85 @@ describe('transport', () => {
     }
   });
 
+  describe('truncates messages to the Telegram limit of 4096 characters', () => {
+    const MARK = '…(truncated)';
+
+    it('keeps messages up to the limit unchanged', async (t) => {
+      const fetchMock = mockFetch(t);
+      const msg = 'a'.repeat(4096);
+
+      await runTransport({}, [record({ msg })]);
+
+      assert.equal(requestOf(fetchMock).body.text, msg);
+    });
+
+    it('truncates a long message', async (t) => {
+      const fetchMock = mockFetch(t);
+
+      await runTransport({}, [record({ msg: 'a'.repeat(5000) })]);
+
+      const sent = requestOf(fetchMock).body.text;
+      assert.equal(sent.length, 4096);
+      assert.ok(sent.endsWith(`a${MARK}`));
+    });
+
+    it('does not split a surrogate pair', async (t) => {
+      const fetchMock = mockFetch(t);
+      const msg = `${'a'.repeat(4096 - MARK.length - 1)}${'😀'.repeat(10)}`;
+
+      await runTransport({}, [record({ msg })]);
+
+      const sent = requestOf(fetchMock).body.text;
+      assert.ok(sent.isWellFormed(), 'contains a lone surrogate');
+      assert.ok(sent.length <= 4096);
+      assert.ok(sent.endsWith(`a${MARK}`));
+    });
+
+    it('truncates long verbose JSON', async (t) => {
+      const fetchMock = mockFetch(t);
+
+      await runTransport({ verbose: true }, [
+        record({ msg: 'a'.repeat(5000) }),
+      ]);
+
+      const sent = requestOf(fetchMock).body.text;
+      assert.equal(sent.length, 4096);
+      assert.ok(sent.endsWith(MARK));
+    });
+
+    for (const [parseMode, open, close] of [
+      ['HTML', '<pre><code class="language-json">', '</code></pre>'],
+      ['MarkdownV2', '```json\n', '\n```'],
+      ['Markdown', '```json\n', '\n```'],
+    ]) {
+      it(`keeps the ${parseMode} code block intact`, async (t) => {
+        const fetchMock = mockFetch(t);
+
+        await runTransport(
+          { verbose: true, extra: { parse_mode: parseMode } },
+          [record({ msg: '<&`'.repeat(2000) })],
+        );
+
+        const sent = requestOf(fetchMock).body.text;
+        assert.ok(sent.startsWith(open));
+        assert.ok(sent.endsWith(`${MARK}${close}`));
+        // Escaping makes the raw text longer, but after parsing only the
+        // unescaped content counts, and it fits the limit with the wrapper.
+        const content = sent.slice(open.length, -close.length);
+        const unescaped =
+          parseMode === 'HTML'
+            ? content
+                .replaceAll('&lt;', '<')
+                .replaceAll('&gt;', '>')
+                .replaceAll('&amp;', '&')
+            : parseMode === 'MarkdownV2'
+              ? content.replace(/\\([`\\])/g, '$1')
+              : content;
+        assert.ok(unescaped.length + open.length + close.length <= 4096);
+      });
+    }
+  });
+
   it('keeps working with an unknown parse_mode in verbose mode', async (t) => {
     const fetchMock = mockFetch(t);
     const item = record();

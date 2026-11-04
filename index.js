@@ -199,6 +199,22 @@ const verboseSerializer = {
   markdownv2: (string) => `\`\`\`json\n${escapeMarkdownV2Code(string)}\n\`\`\``,
 };
 
+// Telegram rejects messages longer than 4096 characters (counted in UTF-16
+// code units after entities parsing).
+const MAX_MESSAGE_LENGTH = 4096;
+const TRUNCATION_MARK = '…(truncated)';
+
+const truncate = (string, maxLength) => {
+  if (string.length <= maxLength) return string;
+
+  let end = maxLength - TRUNCATION_MARK.length;
+  // Do not cut a surrogate pair (e.g. an emoji) in half.
+  const lastCode = string.charCodeAt(end - 1);
+  if (lastCode >= 0xd800 && lastCode <= 0xdbff) end -= 1;
+
+  return string.slice(0, end) + TRUNCATION_MARK;
+};
+
 const prepareMessage = ({ pinoData, verbose, parseMode, messageKey }) => {
   const message = pinoData[messageKey];
   const hasMessage =
@@ -207,14 +223,23 @@ const prepareMessage = ({ pinoData, verbose, parseMode, messageKey }) => {
   // A record without a message (e.g. `logger.error({ userId: 1 })`) would be
   // rejected by Telegram with "message text is empty", so the whole record is
   // sent instead.
-  if (!verbose && hasMessage) return String(message);
+  if (!verbose && hasMessage) {
+    return truncate(String(message), MAX_MESSAGE_LENGTH);
+  }
 
   const msg = JSON.stringify(pinoData, null, 2);
+  const serializer =
+    typeof parseMode === 'string'
+      ? verboseSerializer[parseMode.toLowerCase()]
+      : undefined;
 
-  if (typeof parseMode !== 'string') return msg;
+  if (!serializer) return truncate(msg, MAX_MESSAGE_LENGTH);
 
-  const serializer = verboseSerializer[parseMode.toLowerCase()];
-  return serializer ? serializer(msg) : msg;
+  // Truncate before wrapping and escaping so the markup stays valid.
+  // Escape sequences and the wrapper markup do not count towards the limit
+  // after parsing, but the wrapper length is reserved anyway to stay safe.
+  const wrapperLength = serializer('').length;
+  return serializer(truncate(msg, MAX_MESSAGE_LENGTH - wrapperLength));
 };
 
 /**
