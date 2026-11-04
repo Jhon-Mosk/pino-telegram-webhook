@@ -1,6 +1,6 @@
 {
   "name": "pino-telegram-webhook",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "A Pino v7+ transport that sends logs to Telegram",
   "keywords": [
     "pino",
