@@ -723,8 +723,10 @@ describe('transport', () => {
       ]);
 
       assert.ok(performance.now() - started < 1000, 'did not abort');
+      // Telegram may have accepted the aborted request, so it is not counted
+      // as not sent.
       assert.deepEqual(stderr, [
-        `${PREFIX}3 log message(s) not sent before the transport closed: closeTimeout (50 ms) expired\n`,
+        `${PREFIX}closeTimeout (50 ms) expired before the transport closed: 2 log message(s) not sent, 1 more may not have been delivered (its request was aborted)\n`,
       ]);
     });
 
