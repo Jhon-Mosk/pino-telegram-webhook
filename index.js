@@ -200,8 +200,9 @@ const createDeliveryQueue = ({ send, retries, retryDelay, maxQueueSize }) => {
   };
 
   /**
-   * Sends a message with retries. Returns the reason if the message was given
-   * up on because the transport is closing, otherwise `undefined`.
+   * Sends a message with retries. If the message was given up on because the
+   * transport is closing, returns why and whether its request was aborted in
+   * flight; otherwise returns `undefined`.
    */
   const deliver = async (message) => {
     for (let attempt = 0; ; attempt++) {
@@ -210,7 +211,8 @@ const createDeliveryQueue = ({ send, retries, retryDelay, maxQueueSize }) => {
         return undefined;
       } catch (error) {
         if (expired.signal.aborted) {
-          return `closeTimeout (${closeTimeout} ms) expired`;
+          // Telegram may have received the request before it was aborted.
+          return { aborted: true };
         }
 
         const delay =
@@ -222,23 +224,36 @@ const createDeliveryQueue = ({ send, retries, retryDelay, maxQueueSize }) => {
         }
 
         if (!(await waitForRetry(delay))) {
-          return `a retry in ${Math.ceil(delay / 1000)} s after "${describeError(error)}" does not fit in closeTimeout (${closeTimeout} ms)`;
+          return {
+            aborted: false,
+            reason: `a retry in ${Math.ceil(delay / 1000)} s after "${describeError(error)}" does not fit in closeTimeout (${closeTimeout} ms)`,
+          };
         }
       }
     }
   };
 
+  const describeGivenUp = ({ aborted, reason }, unsent) => {
+    if (!aborted) {
+      return `${unsent + 1} log message(s) not sent before the transport closed: ${reason}`;
+    }
+    const unconfirmed = 'may not have been delivered (its request was aborted)';
+    const counts =
+      unsent > 0
+        ? `${unsent} log message(s) not sent, 1 more ${unconfirmed}`
+        : `1 log message ${unconfirmed}`;
+    return `closeTimeout (${closeTimeout} ms) expired before the transport closed: ${counts}`;
+  };
+
   const drain = async () => {
     while (queue.length > 0) {
-      const reason = await deliver(queue.shift());
+      const givenUp = await deliver(queue.shift());
 
-      if (reason) {
+      if (givenUp) {
         // The rest of the queue cannot be sent in time either.
-        const unsent = queue.length + 1;
+        const unsent = queue.length;
         queue.length = 0;
-        report(
-          `${unsent} log message(s) not sent before the transport closed: ${reason}`,
-        );
+        report(describeGivenUp(givenUp, unsent));
       }
     }
 

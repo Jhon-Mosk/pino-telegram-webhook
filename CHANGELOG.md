@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The minimum Node.js version is 22.12. `require()` of this ES module works
   without a flag only since then; before, CommonJS projects got
   `ERR_REQUIRE_ESM`.
+- When `closeTimeout` expires with a request in flight, the report in stderr
+  no longer counts that message as not sent: Telegram may have received it
+  before the request was aborted. It is reported as possibly not delivered.
 
 ## [0.5.0] - 2026-11-04
 
