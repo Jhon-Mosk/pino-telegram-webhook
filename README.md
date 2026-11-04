@@ -163,7 +163,8 @@ JSON, the same way as in verbose mode.
   `closeTimeout`. A retry that would not happen in time, for example after a
   `429` with `retry_after: 40`, is not waited for: the remaining messages are
   reported to stderr as not sent, so the process exits on time and you know
-  what was lost.
+  what was lost. A request that is aborted when `closeTimeout` expires is
+  reported separately: Telegram may have received it before it was aborted.
 
 ## Examples
 
