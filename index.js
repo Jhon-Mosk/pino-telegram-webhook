@@ -26,13 +26,21 @@ export async function sendMsgToTg(
     body,
   });
 
-  if (response.ok) {
-    const data = await response.json();
-    const { ok, result, error_code, description } = data;
+  // Telegram returns a JSON body with `description` for errors too,
+  // so the body is read regardless of the HTTP status.
+  let data;
+  try {
+    data = await response.json();
+  } catch {
+    data = undefined;
+  }
 
-    if (ok) return result;
+  if (data?.ok) return data.result;
 
-    throw new Error(`${error_code}: ${description}`);
+  if (data?.description) {
+    throw new Error(
+      `${data.error_code ?? response.status}: ${data.description}`,
+    );
   }
 
   const { status, statusText } = response;
@@ -46,15 +54,21 @@ const verboseSerializer = {
 };
 
 const prepareMessage = ({ pinoData, verbose, parseMode, messageKey }) => {
-  if (!verbose) return pinoData[messageKey];
+  const message = pinoData[messageKey];
+  const hasMessage =
+    message !== undefined && message !== null && message !== '';
+
+  // A record without a message (e.g. `logger.error({ userId: 1 })`) would be
+  // rejected by Telegram with "message text is empty", so the whole record is
+  // sent instead.
+  if (!verbose && hasMessage) return String(message);
 
   const msg = JSON.stringify(pinoData, null, 2);
 
-  if (!parseMode) return msg;
+  if (typeof parseMode !== 'string') return msg;
 
-  const parseModeLC = parseMode.toLowerCase();
-  const serializer = verboseSerializer[parseModeLC];
-  return serializer(msg);
+  const serializer = verboseSerializer[parseMode.toLowerCase()];
+  return serializer ? serializer(msg) : msg;
 };
 
 /**
@@ -77,15 +91,15 @@ export default function ({
   extra = {},
 }) {
   const pendingPromises = new Set();
+  const { parse_mode: parseMode } = extra;
 
   return build(
     async (source) => {
       for await (const pinoData of source) {
-        const { parse_mode } = extra;
         const message = prepareMessage({
           pinoData,
           verbose,
-          parseMode: parse_mode,
+          parseMode,
           messageKey,
         });
 
@@ -98,9 +112,11 @@ export default function ({
       }
     },
     {
-      async close(err, cb) {
-        await Promise.allSettled([...pendingPromises]);
-        cb(err, 'close');
+      // pino-abstract-transport calls the destroy callback itself once the
+      // returned promise settles, so `cb` must not be called here.
+      async close(err) {
+        await Promise.allSettled(pendingPromises);
+        if (err) throw err;
       },
     },
   );
