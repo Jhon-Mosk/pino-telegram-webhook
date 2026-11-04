@@ -165,6 +165,33 @@ describe('transport', () => {
     transport.destroy();
   });
 
+  for (const [name, options, message] of [
+    ['chatId is missing', { botToken }, /"chatId" option is required/],
+    [
+      'chatId is empty',
+      { chatId: ' ', botToken },
+      /"chatId" option is required/,
+    ],
+    ['chatId is an object', { chatId: {}, botToken }, /"chatId" option/],
+    ['botToken is missing', { chatId }, /"botToken" option is required/],
+    ['botToken is empty', { chatId, botToken: '' }, /"botToken" option/],
+  ]) {
+    it(`throws when ${name}`, () => {
+      assert.throws(() => createTransport(options), {
+        name: 'TypeError',
+        message,
+      });
+    });
+  }
+
+  it('accepts a string chatId', async (t) => {
+    const fetchMock = mockFetch(t);
+
+    await runTransport({ chatId: '@my_channel' }, [record()]);
+
+    assert.equal(requestOf(fetchMock).body.chat_id, '@my_channel');
+  });
+
   it('sends the log message', async (t) => {
     const fetchMock = mockFetch(t);
 

@@ -74,7 +74,7 @@ const prepareMessage = ({ pinoData, verbose, parseMode, messageKey }) => {
 /**
  *
  * @param {object} params - parameters for creating a transport
- * @param {number} params.chatId - chat ID
+ * @param {number|string} params.chatId - chat ID or `@channelusername`
  * @param {string} params.botToken - bot token
  * @param {boolean} [params.verbose] - send debugging information
  * @param {string} [params.messageKey] - key for message. Default is 'msg'
@@ -90,6 +90,21 @@ export default function ({
   apiUrl = API_URL,
   extra = {},
 }) {
+  // Without these every log would fail silently, so fail fast instead.
+  if (
+    !['number', 'string'].includes(typeof chatId) ||
+    String(chatId).trim() === ''
+  ) {
+    throw new TypeError(
+      'pino-telegram-webhook: "chatId" option is required (number or string)',
+    );
+  }
+  if (typeof botToken !== 'string' || botToken.trim() === '') {
+    throw new TypeError(
+      'pino-telegram-webhook: "botToken" option is required (string)',
+    );
+  }
+
   const pendingPromises = new Set();
   const { parse_mode: parseMode } = extra;
 
