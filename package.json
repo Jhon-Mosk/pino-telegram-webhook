@@ -1,7 +1,7 @@
 {
   "name": "pino-telegram-webhook",
-  "version": "0.4.0",
-  "description": "A [Pino v7+ transport](https://getpino.io/#/docs/transports?id=v7-transports) to send message to [Telegram](https://telegram.org/)",
+  "version": "0.5.0",
+  "description": "A Pino v7+ transport that sends logs to Telegram",
   "keywords": [
     "pino",
     "telegram",
@@ -9,6 +9,19 @@
     "telegram webhook"
   ],
   "main": "index.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "CHANGELOG.md"
+  ],
   "type": "module",
   "scripts": {
     "test": "node --test",
@@ -16,11 +29,10 @@
     "fix": "biome check --write ."
   },
   "engines": {
-    "node": ">=22.0.0",
-    "npm": ">=10.0.0"
+    "node": ">=22.0.0"
   },
   "dependencies": {
-    "pino-abstract-transport": "^1.2.0"
+    "pino-abstract-transport": "^3.0.0"
   },
   "repository": {
     "type": "git",

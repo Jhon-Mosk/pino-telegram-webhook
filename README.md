@@ -105,3 +105,21 @@ try {
   }
 }
 ```
+
+## TypeScript
+
+Type definitions are included. `TransportOptions` describes the transport options:
+
+```ts
+import pino from 'pino';
+import type { TransportOptions } from 'pino-telegram-webhook';
+
+const options: TransportOptions = {
+  chatId: -1234567890,
+  botToken: process.env.TELEGRAM_BOT_TOKEN!,
+};
+
+const logger = pino({
+  transport: { target: 'pino-telegram-webhook', level: 'error', options },
+});
+```

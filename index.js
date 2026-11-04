@@ -369,7 +369,7 @@ const prepareMessage = ({ pinoData, verbose, parseMode, messageKey }) => {
  * @param {number} [params.closeTimeout] - how long in ms to keep sending queued
  *   messages when the logger closes. pino waits at most 10 s for a transport.
  *   Default is 8000, `Infinity` waits until the queue is sent
- * @returns {Promise}
+ * @returns {import('node:stream').Transform} the transport stream
  */
 export default function ({
   chatId,
