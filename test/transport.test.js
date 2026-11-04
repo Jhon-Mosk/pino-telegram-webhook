@@ -625,10 +625,16 @@ describe('transport', () => {
       [1, 2, 3, 4, 5].map((n) => record({ msg: `msg ${n}` })),
     );
 
-    // The first message is in flight, the next two wait in the queue.
+    // The first message is in flight, the next two wait in the queue. The
+    // notice about the dropped ones is sent after them.
     assert.deepEqual(
       fetchMock.mock.calls.map((_, i) => requestOf(fetchMock, i).body.text),
-      ['msg 1', 'msg 2', 'msg 3'],
+      [
+        'msg 1',
+        'msg 2',
+        'msg 3',
+        '⚠️ pino-telegram-webhook: 2 log message(s) dropped because the queue was full (maxQueueSize: 2)',
+      ],
     );
     assert.equal(stderr.length, 2);
     assert.match(

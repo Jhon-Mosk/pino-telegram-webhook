@@ -60,6 +60,13 @@ export interface TransportOptions {
    */
   maxQueueSize?: number;
   /**
+   * When messages were dropped because the queue was full, send their number
+   * to the chat as plain text once the queue is sent. It is always written to
+   * stderr.
+   * @default true
+   */
+  notifyDropped?: boolean;
+  /**
    * How long in ms to keep sending queued messages when the logger closes.
    * pino waits at most 10 s for a transport. `Infinity` waits until the queue
    * is sent.

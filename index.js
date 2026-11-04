@@ -171,9 +171,20 @@ const getRetryDelay = (error, attempt, retryDelay) => {
  * Sends messages one at a time, in order. Telegram allows about one message
  * per second per chat, so parallel requests only lead to 429 errors.
  * The queue is bounded: when it is full, new messages are dropped rather than
- * growing memory without limit during a burst of logs.
+ * growing memory without limit during a burst of logs. Once the queue is sent,
+ * the number of dropped messages is reported to stderr and, with
+ * `notifyDropped`, sent to the chat as a notice.
+ *
+ * `send(item, signal)` gets `{ text }` for a log message and
+ * `{ text, notice: true }` for the notice.
  */
-const createDeliveryQueue = ({ send, retries, retryDelay, maxQueueSize }) => {
+const createDeliveryQueue = ({
+  send,
+  retries,
+  retryDelay,
+  maxQueueSize,
+  notifyDropped,
+}) => {
   const queue = [];
   let dropped = 0;
   let draining = null;
@@ -200,14 +211,14 @@ const createDeliveryQueue = ({ send, retries, retryDelay, maxQueueSize }) => {
   };
 
   /**
-   * Sends a message with retries. If the message was given up on because the
-   * transport is closing, returns why and whether its request was aborted in
-   * flight; otherwise returns `undefined`.
+   * Sends an item with retries. If it was given up on because the transport
+   * is closing, returns why and whether its request was aborted in flight;
+   * otherwise returns `undefined`.
    */
-  const deliver = async (message) => {
+  const deliver = async (item) => {
     for (let attempt = 0; ; attempt++) {
       try {
-        await send(message, expired.signal);
+        await send(item, expired.signal);
         return undefined;
       } catch (error) {
         if (expired.signal.aborted) {
@@ -219,7 +230,10 @@ const createDeliveryQueue = ({ send, retries, retryDelay, maxQueueSize }) => {
           attempt < retries ? getRetryDelay(error, attempt, retryDelay) : null;
 
         if (delay === null) {
-          report(`failed to send a log message: ${describeError(error)}`);
+          const what = item.notice
+            ? 'the notice about dropped log messages'
+            : 'a log message';
+          report(`failed to send ${what}: ${describeError(error)}`);
           return undefined;
         }
 
@@ -233,41 +247,65 @@ const createDeliveryQueue = ({ send, retries, retryDelay, maxQueueSize }) => {
     }
   };
 
-  const describeGivenUp = ({ aborted, reason }, unsent) => {
+  /**
+   * Describes the log messages left when `item` was given up on, or returns
+   * `undefined` if there are none. The notice is not a log message: the
+   * number of dropped messages it carries has been reported already.
+   */
+  const describeGivenUp = ({ aborted, reason }, item, rest) => {
+    const unsent = rest.filter((other) => !other.notice).length;
+
     if (!aborted) {
-      return `${unsent + 1} log message(s) not sent before the transport closed: ${reason}`;
+      const count = unsent + (item.notice ? 0 : 1);
+      if (count === 0) return undefined;
+      return `${count} log message(s) not sent before the transport closed: ${reason}`;
     }
+
     const unconfirmed = 'may not have been delivered (its request was aborted)';
-    const counts =
-      unsent > 0
-        ? `${unsent} log message(s) not sent, 1 more ${unconfirmed}`
-        : `1 log message ${unconfirmed}`;
+    let counts;
+    if (item.notice) {
+      if (unsent === 0) return undefined;
+      counts = `${unsent} log message(s) not sent`;
+    } else if (unsent > 0) {
+      counts = `${unsent} log message(s) not sent, 1 more ${unconfirmed}`;
+    } else {
+      counts = `1 log message ${unconfirmed}`;
+    }
     return `closeTimeout (${closeTimeout} ms) expired before the transport closed: ${counts}`;
   };
 
   const drain = async () => {
-    while (queue.length > 0) {
-      const givenUp = await deliver(queue.shift());
+    let gaveUp = false;
 
-      if (givenUp) {
-        // The rest of the queue cannot be sent in time either.
-        const unsent = queue.length;
-        queue.length = 0;
-        report(describeGivenUp(givenUp, unsent));
+    for (;;) {
+      while (queue.length > 0) {
+        const item = queue.shift();
+        const givenUp = await deliver(item);
+
+        if (givenUp) {
+          // The rest of the queue cannot be sent in time either.
+          gaveUp = true;
+          const description = describeGivenUp(givenUp, item, queue);
+          queue.length = 0;
+          if (description) report(description);
+        }
       }
+
+      if (dropped === 0) break;
+
+      const text = `${dropped} log message(s) dropped because the queue was full (maxQueueSize: ${maxQueueSize})`;
+      dropped = 0;
+      report(text);
+      // After the close deadline nothing more can be sent.
+      if (!notifyDropped || gaveUp || expired.signal.aborted) break;
+      queue.push({ text: `⚠️ ${LOG_PREFIX} ${text}`, notice: true });
     }
 
-    if (dropped > 0) {
-      report(
-        `${dropped} log message(s) dropped because the queue was full (maxQueueSize: ${maxQueueSize})`,
-      );
-      dropped = 0;
-    }
     draining = null;
   };
 
   return {
-    push(message) {
+    push(text) {
       if (queue.length >= maxQueueSize) {
         if (dropped === 0) {
           report(
@@ -278,7 +316,7 @@ const createDeliveryQueue = ({ send, retries, retryDelay, maxQueueSize }) => {
         return;
       }
 
-      queue.push(message);
+      queue.push({ text });
       draining ??= drain();
     },
 
@@ -381,6 +419,9 @@ const prepareMessage = ({ pinoData, verbose, parseMode, messageKey }) => {
  *   Default is 1000
  * @param {number} [params.maxQueueSize] - maximum number of messages waiting
  *   to be sent; new messages are dropped when it is reached. Default is 1000
+ * @param {boolean} [params.notifyDropped] - when messages were dropped
+ *   because the queue was full, send their number to the chat once the queue
+ *   is sent. Default is true
  * @param {number} [params.closeTimeout] - how long in ms to keep sending queued
  *   messages when the logger closes. pino waits at most 10 s for a transport.
  *   Default is 8000, `Infinity` waits until the queue is sent
@@ -397,6 +438,7 @@ export default function ({
   retries = DEFAULT_RETRIES,
   retryDelay = DEFAULT_RETRY_DELAY,
   maxQueueSize = DEFAULT_MAX_QUEUE_SIZE,
+  notifyDropped = true,
   closeTimeout = DEFAULT_CLOSE_TIMEOUT,
 }) {
   // Without these every log would fail silently, so fail fast instead.
@@ -414,16 +456,26 @@ export default function ({
     );
   }
 
-  const { parse_mode: parseMode } = extra;
+  // The notice is plain text, so it does not depend on the markup rules of
+  // the parse mode; other parameters, such as the topic, are kept.
+  const { parse_mode: parseMode, ...noticeExtra } = extra;
   const queue = createDeliveryQueue({
-    send: (message, signal) =>
-      sendMsgToTg(chatId, botToken, message, extra, apiUrl, {
-        timeout,
-        signal,
-      }),
+    send: ({ text, notice }, signal) =>
+      sendMsgToTg(
+        chatId,
+        botToken,
+        text,
+        notice ? noticeExtra : extra,
+        apiUrl,
+        {
+          timeout,
+          signal,
+        },
+      ),
     retries,
     retryDelay,
     maxQueueSize,
+    notifyDropped,
   });
 
   return build(
