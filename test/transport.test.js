@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { Transform } from 'node:stream';
 import { beforeEach, describe, it } from 'node:test';
-import createTransport, { sendMsgToTg } from '../index.js';
+import createTransport, { sendMsgToTg, TelegramApiError } from '../index.js';
 
 const chatId = -1234567890;
 const botToken = '123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11';
@@ -18,6 +18,29 @@ const okResponse = () => jsonResponse({ ok: true, result: { message_id: 1 } });
 
 const mockFetch = (t, impl = async () => okResponse()) =>
   t.mock.method(globalThis, 'fetch', impl);
+
+/** A fetch that never responds and rejects only when its signal aborts. */
+const hangingFetch = async (_url, init) =>
+  new Promise((_resolve, reject) => {
+    init.signal?.addEventListener('abort', () => reject(init.signal.reason));
+  });
+
+const errorResponse = (status, description, parameters) =>
+  jsonResponse(
+    { ok: false, error_code: status, description, parameters },
+    { status },
+  );
+
+/** A fetch mock that returns the given responses in order, then OK. */
+const sequenceFetch = (...steps) => {
+  let call = 0;
+  return async () => {
+    const step = steps[call++];
+    if (step === undefined) return okResponse();
+    if (step instanceof Error) throw step;
+    return step();
+  };
+};
 
 const requestOf = (fetchMock, index = 0) => {
   const [url, init] = fetchMock.mock.calls[index].arguments;
@@ -139,6 +162,65 @@ describe('sendMsgToTg', () => {
     });
   });
 
+  it('throws a TelegramApiError with the response details', async (t) => {
+    mockFetch(t, async () =>
+      jsonResponse(
+        {
+          ok: false,
+          error_code: 429,
+          description: 'Too Many Requests: retry after 5',
+          parameters: { retry_after: 5 },
+        },
+        { status: 429 },
+      ),
+    );
+
+    const error = await sendMsgToTg(chatId, botToken, text).catch((e) => e);
+
+    assert.ok(error instanceof TelegramApiError);
+    assert.ok(error instanceof Error);
+    assert.equal(error.name, 'TelegramApiError');
+    assert.equal(error.status, 429);
+    assert.equal(error.errorCode, 429);
+    assert.deepEqual(error.parameters, { retry_after: 5 });
+  });
+
+  it('throws a TelegramApiError with only the status for non-JSON bodies', async (t) => {
+    mockFetch(t, async () => new Response('oops', { status: 503 }));
+
+    const error = await sendMsgToTg(chatId, botToken, text).catch((e) => e);
+
+    assert.ok(error instanceof TelegramApiError);
+    assert.equal(error.status, 503);
+    assert.equal(error.errorCode, undefined);
+    assert.equal(error.parameters, undefined);
+  });
+
+  it('aborts the request after the timeout', async (t) => {
+    mockFetch(t, hangingFetch);
+
+    await assert.rejects(
+      sendMsgToTg(chatId, botToken, text, {}, undefined, { timeout: 20 }),
+      { name: 'TimeoutError' },
+    );
+  });
+
+  it('sets a timeout signal by default', async (t) => {
+    const fetchMock = mockFetch(t);
+
+    await sendMsgToTg(chatId, botToken, text);
+
+    assert.ok(requestOf(fetchMock).init.signal instanceof AbortSignal);
+  });
+
+  it('does not set a timeout when timeout is 0', async (t) => {
+    const fetchMock = mockFetch(t);
+
+    await sendMsgToTg(chatId, botToken, text, {}, undefined, { timeout: 0 });
+
+    assert.equal(requestOf(fetchMock).init.signal, undefined);
+  });
+
   it('propagates network errors', async (t) => {
     mockFetch(t, async () => {
       throw new TypeError('fetch failed');
@@ -163,6 +245,33 @@ describe('transport', () => {
     const transport = await createTransport({ chatId, botToken });
     assert.ok(transport instanceof Transform);
     transport.destroy();
+  });
+
+  for (const [name, options, message] of [
+    ['chatId is missing', { botToken }, /"chatId" option is required/],
+    [
+      'chatId is empty',
+      { chatId: ' ', botToken },
+      /"chatId" option is required/,
+    ],
+    ['chatId is an object', { chatId: {}, botToken }, /"chatId" option/],
+    ['botToken is missing', { chatId }, /"botToken" option is required/],
+    ['botToken is empty', { chatId, botToken: '' }, /"botToken" option/],
+  ]) {
+    it(`throws when ${name}`, () => {
+      assert.throws(() => createTransport(options), {
+        name: 'TypeError',
+        message,
+      });
+    });
+  }
+
+  it('accepts a string chatId', async (t) => {
+    const fetchMock = mockFetch(t);
+
+    await runTransport({ chatId: '@my_channel' }, [record()]);
+
+    assert.equal(requestOf(fetchMock).body.chat_id, '@my_channel');
   });
 
   it('sends the log message', async (t) => {
@@ -226,6 +335,119 @@ describe('transport', () => {
     });
   }
 
+  describe('escapes verbose JSON for the parse mode', () => {
+    // JSON.stringify turns the backslash into two characters, MarkdownV2
+    // escaping doubles them again.
+    const item = { level: 50, msg: 'a<b> & `c` ``` d\\e' };
+
+    for (const [parseMode, expectedMsg, wrap] of [
+      [
+        'HTML',
+        'a&lt;b&gt; &amp; `c` ``` d\\\\e',
+        (s) => `<pre><code class="language-json">${s}</code></pre>`,
+      ],
+      [
+        'MarkdownV2',
+        'a<b> & \\`c\\` \\`\\`\\` d\\\\\\\\e',
+        (s) => `\`\`\`json\n${s}\n\`\`\``,
+      ],
+      ['Markdown', "a<b> & `c` ''' d\\\\e", (s) => `\`\`\`json\n${s}\n\`\`\``],
+    ]) {
+      it(parseMode, async (t) => {
+        const fetchMock = mockFetch(t);
+
+        await runTransport(
+          { verbose: true, extra: { parse_mode: parseMode } },
+          [item],
+        );
+
+        assert.equal(
+          requestOf(fetchMock).body.text,
+          wrap(`{\n  "level": 50,\n  "msg": "${expectedMsg}"\n}`),
+        );
+      });
+    }
+  });
+
+  describe('truncates messages to the Telegram limit of 4096 characters', () => {
+    const MARK = '…(truncated)';
+
+    it('keeps messages up to the limit unchanged', async (t) => {
+      const fetchMock = mockFetch(t);
+      const msg = 'a'.repeat(4096);
+
+      await runTransport({}, [record({ msg })]);
+
+      assert.equal(requestOf(fetchMock).body.text, msg);
+    });
+
+    it('truncates a long message', async (t) => {
+      const fetchMock = mockFetch(t);
+
+      await runTransport({}, [record({ msg: 'a'.repeat(5000) })]);
+
+      const sent = requestOf(fetchMock).body.text;
+      assert.equal(sent.length, 4096);
+      assert.ok(sent.endsWith(`a${MARK}`));
+    });
+
+    it('does not split a surrogate pair', async (t) => {
+      const fetchMock = mockFetch(t);
+      const msg = `${'a'.repeat(4096 - MARK.length - 1)}${'😀'.repeat(10)}`;
+
+      await runTransport({}, [record({ msg })]);
+
+      const sent = requestOf(fetchMock).body.text;
+      assert.ok(sent.isWellFormed(), 'contains a lone surrogate');
+      assert.ok(sent.length <= 4096);
+      assert.ok(sent.endsWith(`a${MARK}`));
+    });
+
+    it('truncates long verbose JSON', async (t) => {
+      const fetchMock = mockFetch(t);
+
+      await runTransport({ verbose: true }, [
+        record({ msg: 'a'.repeat(5000) }),
+      ]);
+
+      const sent = requestOf(fetchMock).body.text;
+      assert.equal(sent.length, 4096);
+      assert.ok(sent.endsWith(MARK));
+    });
+
+    for (const [parseMode, open, close] of [
+      ['HTML', '<pre><code class="language-json">', '</code></pre>'],
+      ['MarkdownV2', '```json\n', '\n```'],
+      ['Markdown', '```json\n', '\n```'],
+    ]) {
+      it(`keeps the ${parseMode} code block intact`, async (t) => {
+        const fetchMock = mockFetch(t);
+
+        await runTransport(
+          { verbose: true, extra: { parse_mode: parseMode } },
+          [record({ msg: '<&`'.repeat(2000) })],
+        );
+
+        const sent = requestOf(fetchMock).body.text;
+        assert.ok(sent.startsWith(open));
+        assert.ok(sent.endsWith(`${MARK}${close}`));
+        // Escaping makes the raw text longer, but after parsing only the
+        // unescaped content counts, and it fits the limit with the wrapper.
+        const content = sent.slice(open.length, -close.length);
+        const unescaped =
+          parseMode === 'HTML'
+            ? content
+                .replaceAll('&lt;', '<')
+                .replaceAll('&gt;', '>')
+                .replaceAll('&amp;', '&')
+            : parseMode === 'MarkdownV2'
+              ? content.replace(/\\([`\\])/g, '$1')
+              : content;
+        assert.ok(unescaped.length + open.length + close.length <= 4096);
+      });
+    }
+  });
+
   it('keeps working with an unknown parse_mode in verbose mode', async (t) => {
     const fetchMock = mockFetch(t);
     const item = record();
@@ -257,6 +479,122 @@ describe('transport', () => {
       consoleError.mock.calls[0].arguments[0].message,
       '400: Bad Request',
     );
+  });
+
+  it('passes the timeout option to requests', async (t) => {
+    mockFetch(t, hangingFetch);
+
+    await runTransport({ timeout: 20, retries: 0 }, [record()]);
+
+    assert.equal(consoleError.mock.callCount(), 1);
+    assert.equal(consoleError.mock.calls[0].arguments[0].name, 'TimeoutError');
+  });
+
+  it('sends messages one at a time and in order', async (t) => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const fetchMock = mockFetch(t, async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight -= 1;
+      return okResponse();
+    });
+
+    await runTransport(
+      {},
+      [1, 2, 3].map((n) => record({ msg: `msg ${n}` })),
+    );
+
+    assert.equal(maxInFlight, 1);
+    assert.deepEqual(
+      fetchMock.mock.calls.map((_, i) => requestOf(fetchMock, i).body.text),
+      ['msg 1', 'msg 2', 'msg 3'],
+    );
+  });
+
+  it('retries after retry_after on 429 Too Many Requests', async (t) => {
+    const fetchMock = mockFetch(
+      t,
+      sequenceFetch(() =>
+        errorResponse(429, 'Too Many Requests: retry after 0.05', {
+          retry_after: 0.05,
+        }),
+      ),
+    );
+
+    const started = performance.now();
+    await runTransport({ retryDelay: 0 }, [record()]);
+    const elapsed = performance.now() - started;
+
+    assert.equal(fetchMock.mock.callCount(), 2);
+    assert.ok(elapsed >= 45, `waited only ${elapsed} ms`);
+    assert.equal(consoleError.mock.callCount(), 0);
+  });
+
+  it('retries server errors, timeouts and network errors', async (t) => {
+    const timeoutError = new DOMException('timed out', 'TimeoutError');
+    const fetchMock = mockFetch(
+      t,
+      sequenceFetch(
+        () => errorResponse(502, 'Bad Gateway'),
+        new TypeError('fetch failed'),
+        timeoutError,
+      ),
+    );
+
+    await runTransport({ retryDelay: 1 }, [record()]);
+
+    assert.equal(fetchMock.mock.callCount(), 4);
+    assert.equal(consoleError.mock.callCount(), 0);
+  });
+
+  it('does not retry other client errors', async (t) => {
+    const fetchMock = mockFetch(t, async () =>
+      errorResponse(400, 'Bad Request: chat not found'),
+    );
+
+    await runTransport({ retryDelay: 1 }, [record()]);
+
+    assert.equal(fetchMock.mock.callCount(), 1);
+    assert.equal(consoleError.mock.callCount(), 1);
+  });
+
+  it('gives up after the configured number of retries', async (t) => {
+    const fetchMock = mockFetch(t, async () =>
+      errorResponse(500, 'Internal Server Error'),
+    );
+
+    await runTransport({ retries: 2, retryDelay: 1 }, [record()]);
+
+    assert.equal(fetchMock.mock.callCount(), 3);
+    assert.equal(consoleError.mock.callCount(), 1);
+    assert.equal(
+      consoleError.mock.calls[0].arguments[0].message,
+      '500: Internal Server Error',
+    );
+  });
+
+  it('drops messages when the queue is full and reports how many', async (t) => {
+    const fetchMock = mockFetch(t, async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return okResponse();
+    });
+
+    await runTransport(
+      { maxQueueSize: 2 },
+      [1, 2, 3, 4, 5].map((n) => record({ msg: `msg ${n}` })),
+    );
+
+    // The first message is in flight, the next two wait in the queue.
+    assert.deepEqual(
+      fetchMock.mock.calls.map((_, i) => requestOf(fetchMock, i).body.text),
+      ['msg 1', 'msg 2', 'msg 3'],
+    );
+    const messages = consoleError.mock.calls.map((c) => c.arguments[0]);
+    assert.equal(messages.length, 2);
+    assert.match(messages[0], /queue is full \(maxQueueSize: 2\)/);
+    assert.match(messages[1], /2 log message\(s\) dropped/);
   });
 
   it('waits for pending requests before closing', async (t) => {

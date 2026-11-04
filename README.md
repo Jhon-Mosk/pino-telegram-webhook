@@ -33,14 +33,18 @@ logger.error('<b>test log!</b>');
 
 ## Options descriptions
 
-- `chatId`: The chat ID of the Telegram channel or group. Required.
+- `chatId`: The chat ID of the Telegram channel or group (a number), or the username of a channel (`'@channelusername'`). Required.
 - `botToken`: The bot token of the Telegram bot. Required.
 - `verbose`: Whether to display the log in verbose mode.
 - `messageKey`: The key of the log message. Default is `msg`. Required if the logger's [message key](https://github.com/pinojs/pino/blob/HEAD/docs/api.md#messagekey-string) has been changed.
 - `apiUrl`: Telegram Bot API URL. Default is `https://api.telegram.org`. Use this to send requests through your own reverse proxy.
-- `extra` : The extra parameter is optional. Parameters that the method [sendMessage](https://core.telegram.org/bots/api#sendmessage) supports can be passed to it
+- `extra`: Optional. Any parameters supported by the [sendMessage](https://core.telegram.org/bots/api#sendmessage) method, e.g. `parse_mode`, `disable_notification` or `message_thread_id` (to post to a forum topic).
+- `timeout`: Request timeout in milliseconds. Default is `10000`. `0` disables it.
+- `retries`: How many times to retry a message after a rate limit (`429`), a server error (`5xx`), a timeout or a network error. Default is `3`.
+- `retryDelay`: Base delay in milliseconds for exponential backoff between retries. `429` responses wait for the `retry_after` returned by Telegram instead. Default is `1000`.
+- `maxQueueSize`: Maximum number of messages waiting to be sent. Default is `1000`.
 
-The extra parameter is optional. Parameters that the method [sendMessage](https://core.telegram.org/bots/api#sendmessage) supports can be passed to it
+The transport throws a `TypeError` on creation if `chatId` or `botToken` is missing.
 
 ---
 
@@ -67,5 +71,36 @@ If `verbose = true` and `parse_mode = "HTML|Markdown|MarkdownV2`, the message wi
   "pid": 13522,
   "hostname": "fedora",
   "msg": "`inline fixed-width code`"
+}
+```
+
+The JSON is escaped for the chosen `parse_mode`, so characters like `<`, `&` or `` ` `` in log records do not break the markup.
+
+A record without a message (e.g. `logger.error({ userId: 1 })`) is sent as JSON, the same way as in verbose mode.
+
+## Delivery
+
+- Messages are sent one at a time and in order. Telegram allows about [one message per second per chat](https://core.telegram.org/bots/faq#my-bot-is-hitting-limits-how-do-i-avoid-this), so parallel requests would only be rejected.
+- Rate limits, server errors, timeouts and network errors are retried (see `retries`). Other errors, such as an invalid token, an unknown chat or invalid markup, are not retried.
+- When the queue is full (see `maxQueueSize`), new messages are dropped. The number of dropped messages is written to stderr.
+- Messages longer than Telegram's limit of 4096 characters are truncated and end with `…(truncated)`. In verbose mode the JSON is truncated before it is wrapped in a code block, so the markup stays valid. With `parse_mode` and your own markup in a message, truncation can cut a tag, and Telegram rejects such a message.
+- Errors that are not retried, or remain after all retries, are written to stderr with `console.error`.
+- When the logger is closed, the transport waits until the queue is sent. Pino waits for a transport for at most 10 seconds on exit, so messages still queued or waiting for a retry after that are lost.
+
+## Sending messages directly
+
+`sendMsgToTg` sends a single message without the transport. On failure it throws a `TelegramApiError` with `status` (HTTP status), `errorCode` and `parameters` from the Telegram response.
+
+```js
+import { sendMsgToTg, TelegramApiError } from 'pino-telegram-webhook';
+
+try {
+  await sendMsgToTg(chatId, botToken, 'Hello', { parse_mode: 'HTML' }, undefined, {
+    timeout: 5000,
+  });
+} catch (error) {
+  if (error instanceof TelegramApiError && error.status === 429) {
+    console.log(`Retry after ${error.parameters.retry_after} s`);
+  }
 }
 ```
