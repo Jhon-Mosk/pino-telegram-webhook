@@ -179,10 +179,24 @@ const createDeliveryQueue = ({ send, retries, retryDelay, maxQueueSize }) => {
   };
 };
 
+// Log records contain arbitrary text (messages, stack traces), so it is
+// escaped according to the rules for code blocks of each parse mode:
+// https://core.telegram.org/bots/api#formatting-options
+const escapeHtml = (string) =>
+  string.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+// Inside pre and code entities '`' and '\' must be escaped with '\'.
+const escapeMarkdownV2Code = (string) => string.replace(/[`\\]/g, '\\$&');
+
+// Legacy Markdown has no escaping inside code blocks, so a "```" that would
+// close the block early is replaced.
+const escapeMarkdownCode = (string) => string.replace(/```/g, "'''");
+
 const verboseSerializer = {
-  html: (string) => `<pre><code class="language-json">${string}</code></pre>`,
-  markdown: (string) => `\`\`\`json\n${string}\n\`\`\``,
-  markdownv2: (string) => `\`\`\`json\n${string}\n\`\`\``,
+  html: (string) =>
+    `<pre><code class="language-json">${escapeHtml(string)}</code></pre>`,
+  markdown: (string) => `\`\`\`json\n${escapeMarkdownCode(string)}\n\`\`\``,
+  markdownv2: (string) => `\`\`\`json\n${escapeMarkdownV2Code(string)}\n\`\`\``,
 };
 
 const prepareMessage = ({ pinoData, verbose, parseMode, messageKey }) => {

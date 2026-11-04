@@ -335,6 +335,40 @@ describe('transport', () => {
     });
   }
 
+  describe('escapes verbose JSON for the parse mode', () => {
+    // JSON.stringify turns the backslash into two characters, MarkdownV2
+    // escaping doubles them again.
+    const item = { level: 50, msg: 'a<b> & `c` ``` d\\e' };
+
+    for (const [parseMode, expectedMsg, wrap] of [
+      [
+        'HTML',
+        'a&lt;b&gt; &amp; `c` ``` d\\\\e',
+        (s) => `<pre><code class="language-json">${s}</code></pre>`,
+      ],
+      [
+        'MarkdownV2',
+        'a<b> & \\`c\\` \\`\\`\\` d\\\\\\\\e',
+        (s) => `\`\`\`json\n${s}\n\`\`\``,
+      ],
+      ['Markdown', "a<b> & `c` ''' d\\\\e", (s) => `\`\`\`json\n${s}\n\`\`\``],
+    ]) {
+      it(parseMode, async (t) => {
+        const fetchMock = mockFetch(t);
+
+        await runTransport(
+          { verbose: true, extra: { parse_mode: parseMode } },
+          [item],
+        );
+
+        assert.equal(
+          requestOf(fetchMock).body.text,
+          wrap(`{\n  "level": 50,\n  "msg": "${expectedMsg}"\n}`),
+        );
+      });
+    }
+  });
+
   it('keeps working with an unknown parse_mode in verbose mode', async (t) => {
     const fetchMock = mockFetch(t);
     const item = record();
