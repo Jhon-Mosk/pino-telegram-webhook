@@ -32,7 +32,7 @@ jobs:
       fail-fast: false
       matrix:
         # 22.12 is the minimum version in engines.
-        node: ['22.12', 24, 26]
+        node: ["22.12", 24, 26]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
