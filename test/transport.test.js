@@ -222,6 +222,31 @@ describe('sendMsgToTg', () => {
     assert.equal(requestOf(fetchMock).init.signal, undefined);
   });
 
+  it('aborts the request when the passed signal aborts', async (t) => {
+    mockFetch(t, hangingFetch);
+    const controller = new AbortController();
+    const reason = new Error('stop');
+
+    const promise = sendMsgToTg(chatId, botToken, text, {}, undefined, {
+      signal: controller.signal,
+    });
+    controller.abort(reason);
+
+    await assert.rejects(promise, reason);
+  });
+
+  it('applies the timeout together with a passed signal', async (t) => {
+    mockFetch(t, hangingFetch);
+
+    await assert.rejects(
+      sendMsgToTg(chatId, botToken, text, {}, undefined, {
+        timeout: 20,
+        signal: new AbortController().signal,
+      }),
+      { name: 'TimeoutError' },
+    );
+  });
+
   it('propagates network errors', async (t) => {
     mockFetch(t, async () => {
       throw new TypeError('fetch failed');
@@ -634,6 +659,79 @@ describe('transport', () => {
     assert.deepEqual(consoleError.mock.calls[0].arguments, [
       `${PREFIX}failed to send a log message: 400: Bad Request`,
     ]);
+  });
+
+  describe('closing', () => {
+    const tooManyRequests = (retryAfter) => async () =>
+      errorResponse(429, `Too Many Requests: retry after ${retryAfter}`, {
+        retry_after: retryAfter,
+      });
+
+    it('gives up a retry that does not fit in closeTimeout', async (t) => {
+      const fetchMock = mockFetch(t, tooManyRequests(40));
+
+      const started = performance.now();
+      await runTransport({ closeTimeout: 100 }, [record(), record()]);
+
+      assert.ok(performance.now() - started < 1000, 'waited for retry_after');
+      assert.equal(fetchMock.mock.callCount(), 1);
+      assert.deepEqual(stderr, [
+        `${PREFIX}2 log message(s) not sent before the transport closed: a retry in 40 s after "429: Too Many Requests: retry after 40" does not fit in closeTimeout (100 ms)\n`,
+      ]);
+    });
+
+    it('keeps waiting for a retry that fits in closeTimeout', async (t) => {
+      const fetchMock = mockFetch(
+        t,
+        sequenceFetch(tooManyRequests(0.2), tooManyRequests(0.2)),
+      );
+      const transport = createTransport({
+        chatId,
+        botToken,
+        closeTimeout: 1000,
+      });
+      const closed = once(transport, 'close');
+
+      transport.write(`${JSON.stringify(record())}\n`);
+      // Start closing while the first retry delay is already running.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const started = performance.now();
+      transport.end();
+      await closed;
+
+      assert.equal(fetchMock.mock.callCount(), 3);
+      assert.ok(performance.now() - started >= 300, 'did not wait');
+      assert.deepEqual(stderr, []);
+    });
+
+    it('aborts the request in flight when closeTimeout expires', async (t) => {
+      mockFetch(t, hangingFetch);
+
+      const started = performance.now();
+      await runTransport({ timeout: 0, closeTimeout: 50 }, [
+        record(),
+        record(),
+        record(),
+      ]);
+
+      assert.ok(performance.now() - started < 1000, 'did not abort');
+      assert.deepEqual(stderr, [
+        `${PREFIX}3 log message(s) not sent before the transport closed: closeTimeout (50 ms) expired\n`,
+      ]);
+    });
+
+    it('waits for the whole queue with closeTimeout: Infinity', async (t) => {
+      const fetchMock = mockFetch(t, sequenceFetch(tooManyRequests(0.3)));
+
+      const started = performance.now();
+      await runTransport({ closeTimeout: Number.POSITIVE_INFINITY }, [
+        record(),
+      ]);
+
+      assert.equal(fetchMock.mock.callCount(), 2);
+      assert.ok(performance.now() - started >= 250, 'did not wait');
+      assert.deepEqual(stderr, []);
+    });
   });
 
   it('waits for pending requests before closing', async (t) => {

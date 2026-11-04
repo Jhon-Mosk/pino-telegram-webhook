@@ -7,6 +7,9 @@ const DEFAULT_TIMEOUT = 10_000;
 const DEFAULT_RETRIES = 3;
 const DEFAULT_RETRY_DELAY = 1_000;
 const DEFAULT_MAX_QUEUE_SIZE = 1_000;
+// pino (thread-stream) waits at most 10 s for a transport to close and then
+// terminates the worker, so the queue has to be done before that.
+const DEFAULT_CLOSE_TIMEOUT = 8_000;
 const LOG_PREFIX = 'pino-telegram-webhook:';
 
 /**
@@ -30,6 +33,11 @@ export class TelegramApiError extends Error {
   }
 }
 
+const combineSignals = (...signals) => {
+  const defined = signals.filter(Boolean);
+  return defined.length > 1 ? AbortSignal.any(defined) : defined[0];
+};
+
 /**
  * Sends a message with the sendMessage method of the Telegram Bot API.
  *
@@ -40,6 +48,7 @@ export class TelegramApiError extends Error {
  * @param {string} [apiUrl] - Telegram Bot API URL
  * @param {object} [options]
  * @param {number} [options.timeout] - request timeout in ms, `0` disables it
+ * @param {AbortSignal} [options.signal] - aborts the request
  * @returns {Promise<object>} the sent Message
  * @throws {TelegramApiError} when the API responds with an error
  */
@@ -49,7 +58,7 @@ export async function sendMsgToTg(
   message,
   extra = {},
   apiUrl = API_URL,
-  { timeout = DEFAULT_TIMEOUT } = {},
+  { timeout = DEFAULT_TIMEOUT, signal } = {},
 ) {
   const method = 'sendMessage';
   const baseUrl = apiUrl.replace(/\/+$/, '');
@@ -66,7 +75,10 @@ export async function sendMsgToTg(
       'Content-Type': 'application/json',
     },
     body,
-    signal: timeout > 0 ? AbortSignal.timeout(timeout) : undefined,
+    signal: combineSignals(
+      timeout > 0 ? AbortSignal.timeout(timeout) : undefined,
+      signal,
+    ),
   });
 
   // Telegram returns a JSON body with `description` for errors too,
@@ -118,7 +130,23 @@ const describeError = (error) => {
   return `${error?.name}: ${error?.message}${cause ? ` (${cause})` : ''}`;
 };
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+/** Resolves after `ms`, or earlier when `signal` aborts. */
+const sleep = (ms, signal) =>
+  new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 
 /**
  * Returns how long to wait before retrying a failed request,
@@ -150,27 +178,68 @@ const createDeliveryQueue = ({ send, retries, retryDelay, maxQueueSize }) => {
   let dropped = 0;
   let draining = null;
 
+  // Aborted when closing starts: wakes up a pending retry delay, which is
+  // then either shortened to fit the close timeout or given up on.
+  const closing = new AbortController();
+  // Aborted when the close timeout expires: aborts the request in flight.
+  const expired = new AbortController();
+  let closeTimeout = Number.POSITIVE_INFINITY;
+  let closeDeadline = Number.POSITIVE_INFINITY;
+
+  /** Waits before a retry. Returns false if it would end after the close deadline. */
+  const waitForRetry = async (delay) => {
+    const retryAt = Date.now() + delay;
+    await sleep(delay, closing.signal);
+
+    const remaining = retryAt - Date.now();
+    if (remaining <= 0) return true;
+    if (retryAt > closeDeadline) return false;
+
+    await sleep(remaining);
+    return true;
+  };
+
+  /**
+   * Sends a message with retries. Returns the reason if the message was given
+   * up on because the transport is closing, otherwise `undefined`.
+   */
   const deliver = async (message) => {
     for (let attempt = 0; ; attempt++) {
       try {
-        await send(message);
-        return;
+        await send(message, expired.signal);
+        return undefined;
       } catch (error) {
+        if (expired.signal.aborted) {
+          return `closeTimeout (${closeTimeout} ms) expired`;
+        }
+
         const delay =
           attempt < retries ? getRetryDelay(error, attempt, retryDelay) : null;
 
         if (delay === null) {
           report(`failed to send a log message: ${describeError(error)}`);
-          return;
+          return undefined;
         }
-        await sleep(delay);
+
+        if (!(await waitForRetry(delay))) {
+          return `a retry in ${Math.ceil(delay / 1000)} s after "${describeError(error)}" does not fit in closeTimeout (${closeTimeout} ms)`;
+        }
       }
     }
   };
 
   const drain = async () => {
     while (queue.length > 0) {
-      await deliver(queue.shift());
+      const reason = await deliver(queue.shift());
+
+      if (reason) {
+        // The rest of the queue cannot be sent in time either.
+        const unsent = queue.length + 1;
+        queue.length = 0;
+        report(
+          `${unsent} log message(s) not sent before the transport closed: ${reason}`,
+        );
+      }
     }
 
     if (dropped > 0) {
@@ -198,9 +267,21 @@ const createDeliveryQueue = ({ send, retries, retryDelay, maxQueueSize }) => {
       draining ??= drain();
     },
 
-    /** Resolves when all queued messages are sent or given up on. */
-    idle() {
-      return draining ?? Promise.resolve();
+    /**
+     * Sends the rest of the queue within `timeout` ms and resolves when it is
+     * done. Messages that cannot be sent in time are reported and dropped.
+     */
+    async close(timeout) {
+      let timer;
+      if (Number.isFinite(timeout)) {
+        closeTimeout = timeout;
+        closeDeadline = Date.now() + timeout;
+        timer = setTimeout(() => expired.abort(), timeout);
+      }
+      closing.abort();
+
+      await draining;
+      clearTimeout(timer);
     },
   };
 };
@@ -285,6 +366,9 @@ const prepareMessage = ({ pinoData, verbose, parseMode, messageKey }) => {
  *   Default is 1000
  * @param {number} [params.maxQueueSize] - maximum number of messages waiting
  *   to be sent; new messages are dropped when it is reached. Default is 1000
+ * @param {number} [params.closeTimeout] - how long in ms to keep sending queued
+ *   messages when the logger closes. pino waits at most 10 s for a transport.
+ *   Default is 8000, `Infinity` waits until the queue is sent
  * @returns {Promise}
  */
 export default function ({
@@ -298,6 +382,7 @@ export default function ({
   retries = DEFAULT_RETRIES,
   retryDelay = DEFAULT_RETRY_DELAY,
   maxQueueSize = DEFAULT_MAX_QUEUE_SIZE,
+  closeTimeout = DEFAULT_CLOSE_TIMEOUT,
 }) {
   // Without these every log would fail silently, so fail fast instead.
   if (
@@ -316,8 +401,11 @@ export default function ({
 
   const { parse_mode: parseMode } = extra;
   const queue = createDeliveryQueue({
-    send: (message) =>
-      sendMsgToTg(chatId, botToken, message, extra, apiUrl, { timeout }),
+    send: (message, signal) =>
+      sendMsgToTg(chatId, botToken, message, extra, apiUrl, {
+        timeout,
+        signal,
+      }),
     retries,
     retryDelay,
     maxQueueSize,
@@ -340,7 +428,7 @@ export default function ({
       // pino-abstract-transport calls the destroy callback itself once the
       // returned promise settles, so `cb` must not be called here.
       async close(err) {
-        await queue.idle();
+        await queue.close(closeTimeout);
         if (err) throw err;
       },
     },

@@ -43,6 +43,7 @@ logger.error('<b>test log!</b>');
 - `retries`: How many times to retry a message after a rate limit (`429`), a server error (`5xx`), a timeout or a network error. Default is `3`.
 - `retryDelay`: Base delay in milliseconds for exponential backoff between retries. `429` responses wait for the `retry_after` returned by Telegram instead. Default is `1000`.
 - `maxQueueSize`: Maximum number of messages waiting to be sent. Default is `1000`.
+- `closeTimeout`: How long in milliseconds to keep sending queued messages when the logger closes. Default is `8000`, because pino waits for a transport for at most 10 seconds. `Infinity` waits until the queue is sent, which only makes sense if you close the transport yourself and wait for it.
 
 The transport throws a `TypeError` on creation if `chatId` or `botToken` is missing.
 
@@ -85,7 +86,7 @@ A record without a message (e.g. `logger.error({ userId: 1 })`) is sent as JSON,
 - When the queue is full (see `maxQueueSize`), new messages are dropped. The number of dropped messages is written to stderr.
 - Messages longer than Telegram's limit of 4096 characters are truncated and end with `…(truncated)`. In verbose mode the JSON is truncated before it is wrapped in a code block, so the markup stays valid. With `parse_mode` and your own markup in a message, truncation can cut a tag, and Telegram rejects such a message.
 - Errors that are not retried, or remain after all retries, are written to stderr with the `pino-telegram-webhook:` prefix. They are written synchronously, so they are not lost when the process exits.
-- When the logger is closed, the transport waits until the queue is sent. Pino waits for a transport for at most 10 seconds on exit, so messages still queued or waiting for a retry after that are lost.
+- When the logger is closed, the transport keeps sending the queue for up to `closeTimeout`. A retry that would not happen in time, for example after a `429` with `retry_after: 40`, is not waited for: the remaining messages are reported to stderr as not sent, so the process exits on time and you know what was lost.
 
 ## Sending messages directly
 
