@@ -20,10 +20,18 @@ const okResponse = () => jsonResponse({ ok: true, result: { message_id: 1 } });
 const mockFetch = (t, impl = async () => okResponse()) =>
   t.mock.method(globalThis, 'fetch', impl);
 
-/** A fetch that never responds and rejects only when its signal aborts. */
+/**
+ * A fetch that never responds and rejects only when its signal aborts. Like a
+ * real request, it keeps the event loop alive until then: the timer of
+ * `AbortSignal.timeout` does not, and Node 22 cancels the tests otherwise.
+ */
 const hangingFetch = async (_url, init) =>
   new Promise((_resolve, reject) => {
-    init.signal?.addEventListener('abort', () => reject(init.signal.reason));
+    const keepAlive = setInterval(() => {}, 1000);
+    init.signal?.addEventListener('abort', () => {
+      clearInterval(keepAlive);
+      reject(init.signal.reason);
+    });
   });
 
 const errorResponse = (status, description, parameters) =>
