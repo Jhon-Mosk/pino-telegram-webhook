@@ -2,6 +2,10 @@ import build from 'pino-abstract-transport';
 
 const API_URL = 'https://api.telegram.org';
 const DEFAULT_TIMEOUT = 10_000;
+const DEFAULT_RETRIES = 3;
+const DEFAULT_RETRY_DELAY = 1_000;
+const DEFAULT_MAX_QUEUE_SIZE = 1_000;
+const LOG_PREFIX = 'pino-telegram-webhook:';
 
 /**
  * An error returned by the Telegram Bot API or by a proxy in front of it.
@@ -88,6 +92,93 @@ export async function sendMsgToTg(
   throw new TelegramApiError(`${status}: ${statusText}`, { status });
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Returns how long to wait before retrying a failed request,
+ * or `null` if the error is permanent and the request must not be retried.
+ */
+const getRetryDelay = (error, attempt, retryDelay) => {
+  const backoff = retryDelay * 2 ** attempt;
+
+  if (!(error instanceof TelegramApiError)) return backoff; // network, timeout
+
+  if (error.status === 429 || error.errorCode === 429) {
+    const retryAfter = error.parameters?.retry_after;
+    return Number.isFinite(retryAfter) ? retryAfter * 1000 : backoff;
+  }
+
+  if (error.status >= 500) return backoff;
+
+  return null; // other client errors: bad token, chat not found, bad markup
+};
+
+/**
+ * Sends messages one at a time, in order. Telegram allows about one message
+ * per second per chat, so parallel requests only lead to 429 errors.
+ * The queue is bounded: when it is full, new messages are dropped rather than
+ * growing memory without limit during a burst of logs.
+ */
+const createDeliveryQueue = ({ send, retries, retryDelay, maxQueueSize }) => {
+  const queue = [];
+  let dropped = 0;
+  let draining = null;
+
+  const deliver = async (message) => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await send(message);
+        return;
+      } catch (error) {
+        const delay =
+          attempt < retries ? getRetryDelay(error, attempt, retryDelay) : null;
+
+        if (delay === null) {
+          console.error(error);
+          return;
+        }
+        await sleep(delay);
+      }
+    }
+  };
+
+  const drain = async () => {
+    while (queue.length > 0) {
+      await deliver(queue.shift());
+    }
+
+    if (dropped > 0) {
+      console.error(
+        `${LOG_PREFIX} ${dropped} log message(s) dropped because the queue was full (maxQueueSize: ${maxQueueSize})`,
+      );
+      dropped = 0;
+    }
+    draining = null;
+  };
+
+  return {
+    push(message) {
+      if (queue.length >= maxQueueSize) {
+        if (dropped === 0) {
+          console.error(
+            `${LOG_PREFIX} queue is full (maxQueueSize: ${maxQueueSize}), dropping log messages`,
+          );
+        }
+        dropped += 1;
+        return;
+      }
+
+      queue.push(message);
+      draining ??= drain();
+    },
+
+    /** Resolves when all queued messages are sent or given up on. */
+    idle() {
+      return draining ?? Promise.resolve();
+    },
+  };
+};
+
 const verboseSerializer = {
   html: (string) => `<pre><code class="language-json">${string}</code></pre>`,
   markdown: (string) => `\`\`\`json\n${string}\n\`\`\``,
@@ -122,6 +213,13 @@ const prepareMessage = ({ pinoData, verbose, parseMode, messageKey }) => {
  * @param {string} [params.apiUrl] - Telegram Bot API URL. Default is 'https://api.telegram.org'
  * @param {object} [params.extra] - additional parameters for sending a message https://core.telegram.org/bots/api#sendmessage
  * @param {number} [params.timeout] - request timeout in ms. Default is 10000, `0` disables it
+ * @param {number} [params.retries] - retries for rate limits (429), server
+ *   errors (5xx), timeouts and network errors. Default is 3
+ * @param {number} [params.retryDelay] - base delay in ms for exponential
+ *   backoff between retries. 429 responses wait for `retry_after` instead.
+ *   Default is 1000
+ * @param {number} [params.maxQueueSize] - maximum number of messages waiting
+ *   to be sent; new messages are dropped when it is reached. Default is 1000
  * @returns {Promise}
  */
 export default function ({
@@ -132,6 +230,9 @@ export default function ({
   apiUrl = API_URL,
   extra = {},
   timeout = DEFAULT_TIMEOUT,
+  retries = DEFAULT_RETRIES,
+  retryDelay = DEFAULT_RETRY_DELAY,
+  maxQueueSize = DEFAULT_MAX_QUEUE_SIZE,
 }) {
   // Without these every log would fail silently, so fail fast instead.
   if (
@@ -148,8 +249,14 @@ export default function ({
     );
   }
 
-  const pendingPromises = new Set();
   const { parse_mode: parseMode } = extra;
+  const queue = createDeliveryQueue({
+    send: (message) =>
+      sendMsgToTg(chatId, botToken, message, extra, apiUrl, { timeout }),
+    retries,
+    retryDelay,
+    maxQueueSize,
+  });
 
   return build(
     async (source) => {
@@ -161,21 +268,14 @@ export default function ({
           messageKey,
         });
 
-        const promise = sendMsgToTg(chatId, botToken, message, extra, apiUrl, {
-          timeout,
-        })
-          .catch((reason) => console.error(reason))
-          .finally(() => {
-            pendingPromises.delete(promise);
-          });
-        pendingPromises.add(promise);
+        queue.push(message);
       }
     },
     {
       // pino-abstract-transport calls the destroy callback itself once the
       // returned promise settles, so `cb` must not be called here.
       async close(err) {
-        await Promise.allSettled(pendingPromises);
+        await queue.idle();
         if (err) throw err;
       },
     },

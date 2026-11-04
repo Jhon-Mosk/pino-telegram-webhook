@@ -25,6 +25,23 @@ const hangingFetch = async (_url, init) =>
     init.signal?.addEventListener('abort', () => reject(init.signal.reason));
   });
 
+const errorResponse = (status, description, parameters) =>
+  jsonResponse(
+    { ok: false, error_code: status, description, parameters },
+    { status },
+  );
+
+/** A fetch mock that returns the given responses in order, then OK. */
+const sequenceFetch = (...steps) => {
+  let call = 0;
+  return async () => {
+    const step = steps[call++];
+    if (step === undefined) return okResponse();
+    if (step instanceof Error) throw step;
+    return step();
+  };
+};
+
 const requestOf = (fetchMock, index = 0) => {
   const [url, init] = fetchMock.mock.calls[index].arguments;
   return { url, init, body: JSON.parse(init.body) };
@@ -354,10 +371,117 @@ describe('transport', () => {
   it('passes the timeout option to requests', async (t) => {
     mockFetch(t, hangingFetch);
 
-    await runTransport({ timeout: 20 }, [record()]);
+    await runTransport({ timeout: 20, retries: 0 }, [record()]);
 
     assert.equal(consoleError.mock.callCount(), 1);
     assert.equal(consoleError.mock.calls[0].arguments[0].name, 'TimeoutError');
+  });
+
+  it('sends messages one at a time and in order', async (t) => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const fetchMock = mockFetch(t, async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight -= 1;
+      return okResponse();
+    });
+
+    await runTransport(
+      {},
+      [1, 2, 3].map((n) => record({ msg: `msg ${n}` })),
+    );
+
+    assert.equal(maxInFlight, 1);
+    assert.deepEqual(
+      fetchMock.mock.calls.map((_, i) => requestOf(fetchMock, i).body.text),
+      ['msg 1', 'msg 2', 'msg 3'],
+    );
+  });
+
+  it('retries after retry_after on 429 Too Many Requests', async (t) => {
+    const fetchMock = mockFetch(
+      t,
+      sequenceFetch(() =>
+        errorResponse(429, 'Too Many Requests: retry after 0.05', {
+          retry_after: 0.05,
+        }),
+      ),
+    );
+
+    const started = performance.now();
+    await runTransport({ retryDelay: 0 }, [record()]);
+    const elapsed = performance.now() - started;
+
+    assert.equal(fetchMock.mock.callCount(), 2);
+    assert.ok(elapsed >= 45, `waited only ${elapsed} ms`);
+    assert.equal(consoleError.mock.callCount(), 0);
+  });
+
+  it('retries server errors, timeouts and network errors', async (t) => {
+    const timeoutError = new DOMException('timed out', 'TimeoutError');
+    const fetchMock = mockFetch(
+      t,
+      sequenceFetch(
+        () => errorResponse(502, 'Bad Gateway'),
+        new TypeError('fetch failed'),
+        timeoutError,
+      ),
+    );
+
+    await runTransport({ retryDelay: 1 }, [record()]);
+
+    assert.equal(fetchMock.mock.callCount(), 4);
+    assert.equal(consoleError.mock.callCount(), 0);
+  });
+
+  it('does not retry other client errors', async (t) => {
+    const fetchMock = mockFetch(t, async () =>
+      errorResponse(400, 'Bad Request: chat not found'),
+    );
+
+    await runTransport({ retryDelay: 1 }, [record()]);
+
+    assert.equal(fetchMock.mock.callCount(), 1);
+    assert.equal(consoleError.mock.callCount(), 1);
+  });
+
+  it('gives up after the configured number of retries', async (t) => {
+    const fetchMock = mockFetch(t, async () =>
+      errorResponse(500, 'Internal Server Error'),
+    );
+
+    await runTransport({ retries: 2, retryDelay: 1 }, [record()]);
+
+    assert.equal(fetchMock.mock.callCount(), 3);
+    assert.equal(consoleError.mock.callCount(), 1);
+    assert.equal(
+      consoleError.mock.calls[0].arguments[0].message,
+      '500: Internal Server Error',
+    );
+  });
+
+  it('drops messages when the queue is full and reports how many', async (t) => {
+    const fetchMock = mockFetch(t, async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return okResponse();
+    });
+
+    await runTransport(
+      { maxQueueSize: 2 },
+      [1, 2, 3, 4, 5].map((n) => record({ msg: `msg ${n}` })),
+    );
+
+    // The first message is in flight, the next two wait in the queue.
+    assert.deepEqual(
+      fetchMock.mock.calls.map((_, i) => requestOf(fetchMock, i).body.text),
+      ['msg 1', 'msg 2', 'msg 3'],
+    );
+    const messages = consoleError.mock.calls.map((c) => c.arguments[0]);
+    assert.equal(messages.length, 2);
+    assert.match(messages[0], /queue is full \(maxQueueSize: 2\)/);
+    assert.match(messages[1], /2 log message\(s\) dropped/);
   });
 
   it('waits for pending requests before closing', async (t) => {
