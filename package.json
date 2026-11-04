@@ -29,7 +29,7 @@
     "fix": "biome check --write ."
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.12.0"
   },
   "dependencies": {
     "pino-abstract-transport": "^3.0.0"
