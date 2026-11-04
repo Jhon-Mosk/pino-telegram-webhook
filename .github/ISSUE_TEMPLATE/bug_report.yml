@@ -1,0 +1,60 @@
+name: Bug report
+description: Something does not work as described.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not post your bot token.** Replace it with `<token>` everywhere below.
+        Security issues: report them privately, see [SECURITY.md](https://github.com/Jhon-Mosk/pino-telegram-webhook/blob/main/SECURITY.md).
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: How to reproduce
+      description: Minimal code that shows the problem, including the transport options (without the token).
+      render: js
+    validations:
+      required: true
+  - type: textarea
+    id: stderr
+    attributes:
+      label: Output in stderr
+      description: Lines starting with `pino-telegram-webhook:`, and any errors or stack traces.
+      render: text
+  - type: input
+    id: package-version
+    attributes:
+      label: pino-telegram-webhook version
+      placeholder: 0.5.0
+    validations:
+      required: true
+  - type: input
+    id: pino-version
+    attributes:
+      label: pino version
+      placeholder: 10.4.0
+    validations:
+      required: true
+  - type: input
+    id: node-version
+    attributes:
+      label: Node.js version
+      placeholder: 24.11.0
+    validations:
+      required: true
+  - type: dropdown
+    id: chat-type
+    attributes:
+      label: Chat type
+      options:
+        - Group or supergroup
+        - Forum topic
+        - Channel
+        - Private chat
