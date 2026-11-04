@@ -1,7 +1,0 @@
-node_modules
-.fuse*
-test/
-.nvmrc
-biome.json
-.editorconfig
-temp/
