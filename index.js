@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import { format } from 'node:util';
 import build from 'pino-abstract-transport';
 
 const API_URL = 'https://api.telegram.org';
@@ -92,6 +94,30 @@ export async function sendMsgToTg(
   throw new TelegramApiError(`${status}: ${statusText}`, { status });
 }
 
+/**
+ * Writes a diagnostic line to stderr synchronously.
+ *
+ * In a worker thread console.error is relayed through the main thread. While
+ * pino waits for the transport to close, the main thread is blocked, so such
+ * output is lost exactly when logs fail to be delivered at shutdown.
+ */
+const report = (...args) => {
+  const line = `${LOG_PREFIX} ${format(...args)}\n`;
+  try {
+    fs.writeSync(2, line);
+  } catch {
+    // e.g. EAGAIN on a non-blocking pipe
+    console.error(line.trimEnd());
+  }
+};
+
+const describeError = (error) => {
+  if (error instanceof TelegramApiError) return error.message;
+  const cause = error?.cause?.message ?? error?.cause?.code;
+  // "fetch failed" alone is useless, the reason (e.g. ENOTFOUND) is the cause.
+  return `${error?.name}: ${error?.message}${cause ? ` (${cause})` : ''}`;
+};
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
@@ -134,7 +160,7 @@ const createDeliveryQueue = ({ send, retries, retryDelay, maxQueueSize }) => {
           attempt < retries ? getRetryDelay(error, attempt, retryDelay) : null;
 
         if (delay === null) {
-          console.error(error);
+          report(`failed to send a log message: ${describeError(error)}`);
           return;
         }
         await sleep(delay);
@@ -148,8 +174,8 @@ const createDeliveryQueue = ({ send, retries, retryDelay, maxQueueSize }) => {
     }
 
     if (dropped > 0) {
-      console.error(
-        `${LOG_PREFIX} ${dropped} log message(s) dropped because the queue was full (maxQueueSize: ${maxQueueSize})`,
+      report(
+        `${dropped} log message(s) dropped because the queue was full (maxQueueSize: ${maxQueueSize})`,
       );
       dropped = 0;
     }
@@ -160,8 +186,8 @@ const createDeliveryQueue = ({ send, retries, retryDelay, maxQueueSize }) => {
     push(message) {
       if (queue.length >= maxQueueSize) {
         if (dropped === 0) {
-          console.error(
-            `${LOG_PREFIX} queue is full (maxQueueSize: ${maxQueueSize}), dropping log messages`,
+          report(
+            `queue is full (maxQueueSize: ${maxQueueSize}), dropping log messages`,
           );
         }
         dropped += 1;

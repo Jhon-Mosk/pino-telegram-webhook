@@ -84,7 +84,7 @@ A record without a message (e.g. `logger.error({ userId: 1 })`) is sent as JSON,
 - Rate limits, server errors, timeouts and network errors are retried (see `retries`). Other errors, such as an invalid token, an unknown chat or invalid markup, are not retried.
 - When the queue is full (see `maxQueueSize`), new messages are dropped. The number of dropped messages is written to stderr.
 - Messages longer than Telegram's limit of 4096 characters are truncated and end with `…(truncated)`. In verbose mode the JSON is truncated before it is wrapped in a code block, so the markup stays valid. With `parse_mode` and your own markup in a message, truncation can cut a tag, and Telegram rejects such a message.
-- Errors that are not retried, or remain after all retries, are written to stderr with `console.error`.
+- Errors that are not retried, or remain after all retries, are written to stderr with the `pino-telegram-webhook:` prefix. They are written synchronously, so they are not lost when the process exits.
 - When the logger is closed, the transport waits until the queue is sent. Pino waits for a transport for at most 10 seconds on exit, so messages still queued or waiting for a retry after that are lost.
 
 ## Sending messages directly

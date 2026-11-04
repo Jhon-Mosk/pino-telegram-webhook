@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import fs from 'node:fs';
 import { Transform } from 'node:stream';
 import { beforeEach, describe, it } from 'node:test';
 import createTransport, { sendMsgToTg, TelegramApiError } from '../index.js';
@@ -234,10 +235,18 @@ describe('sendMsgToTg', () => {
 });
 
 describe('transport', () => {
-  let consoleError;
+  const PREFIX = 'pino-telegram-webhook: ';
+  /** Lines the transport wrote to stderr (fd 2). */
+  let stderr;
 
   beforeEach((t) => {
-    consoleError = t.mock.method(console, 'error', () => {});
+    stderr = [];
+    const { writeSync } = fs;
+    t.mock.method(fs, 'writeSync', (fd, data, ...rest) => {
+      if (fd !== 2) return writeSync(fd, data, ...rest);
+      stderr.push(String(data));
+      return Buffer.byteLength(String(data));
+    });
   });
 
   it('builds a transform stream', async (t) => {
@@ -474,11 +483,10 @@ describe('transport', () => {
 
     assert.deepEqual(errors, []);
     assert.equal(fetchMock.mock.callCount(), 2);
-    assert.equal(consoleError.mock.callCount(), 2);
-    assert.equal(
-      consoleError.mock.calls[0].arguments[0].message,
-      '400: Bad Request',
-    );
+    assert.deepEqual(stderr, [
+      `${PREFIX}failed to send a log message: 400: Bad Request\n`,
+      `${PREFIX}failed to send a log message: 400: Bad Request\n`,
+    ]);
   });
 
   it('passes the timeout option to requests', async (t) => {
@@ -486,8 +494,8 @@ describe('transport', () => {
 
     await runTransport({ timeout: 20, retries: 0 }, [record()]);
 
-    assert.equal(consoleError.mock.callCount(), 1);
-    assert.equal(consoleError.mock.calls[0].arguments[0].name, 'TimeoutError');
+    assert.equal(stderr.length, 1);
+    assert.match(stderr[0], /failed to send a log message: TimeoutError: /);
   });
 
   it('sends messages one at a time and in order', async (t) => {
@@ -529,7 +537,7 @@ describe('transport', () => {
 
     assert.equal(fetchMock.mock.callCount(), 2);
     assert.ok(elapsed >= 45, `waited only ${elapsed} ms`);
-    assert.equal(consoleError.mock.callCount(), 0);
+    assert.deepEqual(stderr, []);
   });
 
   it('retries server errors, timeouts and network errors', async (t) => {
@@ -546,7 +554,7 @@ describe('transport', () => {
     await runTransport({ retryDelay: 1 }, [record()]);
 
     assert.equal(fetchMock.mock.callCount(), 4);
-    assert.equal(consoleError.mock.callCount(), 0);
+    assert.deepEqual(stderr, []);
   });
 
   it('does not retry other client errors', async (t) => {
@@ -557,7 +565,7 @@ describe('transport', () => {
     await runTransport({ retryDelay: 1 }, [record()]);
 
     assert.equal(fetchMock.mock.callCount(), 1);
-    assert.equal(consoleError.mock.callCount(), 1);
+    assert.equal(stderr.length, 1);
   });
 
   it('gives up after the configured number of retries', async (t) => {
@@ -568,11 +576,9 @@ describe('transport', () => {
     await runTransport({ retries: 2, retryDelay: 1 }, [record()]);
 
     assert.equal(fetchMock.mock.callCount(), 3);
-    assert.equal(consoleError.mock.callCount(), 1);
-    assert.equal(
-      consoleError.mock.calls[0].arguments[0].message,
-      '500: Internal Server Error',
-    );
+    assert.deepEqual(stderr, [
+      `${PREFIX}failed to send a log message: 500: Internal Server Error\n`,
+    ]);
   });
 
   it('drops messages when the queue is full and reports how many', async (t) => {
@@ -591,10 +597,43 @@ describe('transport', () => {
       fetchMock.mock.calls.map((_, i) => requestOf(fetchMock, i).body.text),
       ['msg 1', 'msg 2', 'msg 3'],
     );
-    const messages = consoleError.mock.calls.map((c) => c.arguments[0]);
-    assert.equal(messages.length, 2);
-    assert.match(messages[0], /queue is full \(maxQueueSize: 2\)/);
-    assert.match(messages[1], /2 log message\(s\) dropped/);
+    assert.equal(stderr.length, 2);
+    assert.match(
+      stderr[0],
+      /^pino-telegram-webhook: queue is full \(maxQueueSize: 2\)/,
+    );
+    assert.match(
+      stderr[1],
+      /^pino-telegram-webhook: 2 log message\(s\) dropped/,
+    );
+  });
+
+  it('reports the cause of network errors', async (t) => {
+    mockFetch(t, async () => {
+      throw new TypeError('fetch failed', {
+        cause: new Error('getaddrinfo ENOTFOUND api.telegram.org'),
+      });
+    });
+
+    await runTransport({ retries: 0 }, [record()]);
+
+    assert.deepEqual(stderr, [
+      `${PREFIX}failed to send a log message: TypeError: fetch failed (getaddrinfo ENOTFOUND api.telegram.org)\n`,
+    ]);
+  });
+
+  it('falls back to console.error when stderr cannot be written', async (t) => {
+    mockFetch(t, async () => errorResponse(400, 'Bad Request'));
+    t.mock.method(fs, 'writeSync', () => {
+      throw Object.assign(new Error('EAGAIN'), { code: 'EAGAIN' });
+    });
+    const consoleError = t.mock.method(console, 'error', () => {});
+
+    await runTransport({}, [record()]);
+
+    assert.deepEqual(consoleError.mock.calls[0].arguments, [
+      `${PREFIX}failed to send a log message: 400: Bad Request`,
+    ]);
   });
 
   it('waits for pending requests before closing', async (t) => {
