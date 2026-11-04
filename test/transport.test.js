@@ -730,6 +730,16 @@ describe('transport', () => {
       ]);
     });
 
+    it('reports an aborted request alone when the queue is empty', async (t) => {
+      mockFetch(t, hangingFetch);
+
+      await runTransport({ timeout: 0, closeTimeout: 50 }, [record()]);
+
+      assert.deepEqual(stderr, [
+        `${PREFIX}closeTimeout (50 ms) expired before the transport closed: 1 log message may not have been delivered (its request was aborted)\n`,
+      ]);
+    });
+
     it('waits for the whole queue with closeTimeout: Infinity', async (t) => {
       const fetchMock = mockFetch(t, sequenceFetch(tooManyRequests(0.3)));
 
