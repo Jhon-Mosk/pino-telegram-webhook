@@ -9,6 +9,7 @@
     "telegram webhook"
   ],
   "main": "index.js",
+  "types": "index.d.ts",
   "type": "module",
   "scripts": {
     "test": "node --test",
